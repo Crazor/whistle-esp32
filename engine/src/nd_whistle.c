@@ -148,7 +148,7 @@ static void rope(const nd_whistle *w, float *z, uint32_t hd, uint32_t pos)
  * fast path); several rows use the batched kernel, so each weight is decoded
  * once per clip rather than once per frame. */
 static void lin_rows(nd_whistle *w, uint32_t ti, const float *X, uint32_t T,
-                     uint32_t r0, uint32_t nrows, float *Y)
+                     uint32_t r0, uint32_t nrows, float *Y, int slot)
 {
     const nd_tensor *t      = &w->t[ti];
     const void      *b      = dat(w, ti);
@@ -156,13 +156,14 @@ static void lin_rows(nd_whistle *w, uint32_t ti, const float *X, uint32_t T,
     uint32_t         in_pad = nd_cq_in_pad(t);
     uint32_t         k;
     ND_T0(t0);
+    (void)slot;
 
     if (nd_cq_q8_ok(t)) {
         nd_q8_act a;
         if (nd_cq_q8_prepare(t, X, T, &a) == 0) {
             nd_cq_q8_gemm(&w->c, t, b, &a, r0, nrows, Y);
             nd_cq_q8_free(&a);
-            ND_T1(t0, ND_WP_LIN);
+            ND_T1(t0, slot);
             return;
         }
     }
@@ -174,7 +175,7 @@ static void lin_rows(nd_whistle *w, uint32_t ti, const float *X, uint32_t T,
         } else {
             nd_cq_gemv_rows(&w->c, t, b, w->xh, r0, nrows, Y);
         }
-        ND_T1(t0, ND_WP_LIN);
+        ND_T1(t0, slot);
         return;
     }
     {
@@ -184,12 +185,12 @@ static void lin_rows(nd_whistle *w, uint32_t ti, const float *X, uint32_t T,
         nd_cq_gemm_rows(&w->c, t, b, xh, T, r0, nrows, Y);
         ND_FREE(xh);
     }
-    ND_T1(t0, ND_WP_LIN);
+    ND_T1(t0, slot);
 }
 
 static void lin(nd_whistle *w, uint32_t ti, const float *X, uint32_t T, float *Y)
 {
-    lin_rows(w, ti, X, T, 0, w->t[ti].shape[0], Y);
+    lin_rows(w, ti, X, T, 0, w->t[ti].shape[0], Y, ND_WP_LIN);
 }
 
 /* One input, several tensors (Q/K/V/gate; the three mHC phi; cross K/V):
@@ -218,7 +219,7 @@ static void sh_rows(nd_whistle *w, shared_in *s, uint32_t ti, uint32_t r0,
         nd_cq_q8_gemm(&w->c, &w->t[ti], dat(w, ti), &s->a, r0, nrows, Y);
         ND_T1(t0, ND_WP_LIN);
     } else {
-        lin_rows(w, ti, s->X, s->T, r0, nrows, Y);
+        lin_rows(w, ti, s->X, s->T, r0, nrows, Y, ND_WP_LIN);
     }
 }
 
@@ -427,6 +428,7 @@ static void mhc_step(nd_whistle *w, uint32_t mhc, uint32_t layer, uint32_t slot,
 
     for (t = 0; t < T; t++)
         rms_unit(lanes + (size_t)t * nd, nd, nx + (size_t)t * nd);
+    ND_T1(t0, ND_WP_MHC);
     {
         shared_in si;
         sh_begin(w, &si, mhc + H_PHI_PRE, nx, T);
@@ -435,6 +437,8 @@ static void mhc_step(nd_whistle *w, uint32_t mhc, uint32_t layer, uint32_t slot,
         sh_rows(w, &si, mhc + H_PHI_RES, layer * n * n, n * n, res);
         sh_end(&si);
     }
+    {
+    ND_T0(t2);
 
     for (t = 0; t < T; t++) {
         float *l = lanes + (size_t)t * nd, *ut = u + (size_t)t * d;
@@ -447,7 +451,8 @@ static void mhc_step(nd_whistle *w, uint32_t mhc, uint32_t layer, uint32_t slot,
         }
     }
     memcpy(u0, u, (size_t)T * d * sizeof(float));
-    ND_T1(t0, ND_WP_MHC);
+    ND_T1(t2, ND_WP_MHC);
+    }
     fn(w, layer, u, T, ctx);
     {
     ND_T0(t1);
@@ -1005,6 +1010,8 @@ static void dec_block(nd_whistle *w, uint32_t layer, float *x, uint32_t T, void 
         memcpy(kc + h * qk, tmp, qk * sizeof(float));
     }
     memcpy(vc, raw + nq + nk, nv * sizeof(float));
+    {
+    ND_T0(ta);
     for (h = 0; h < nh; h++) {
         uint32_t kh = h / rep;
         for (s = 0; s <= pos; s++) {
@@ -1021,6 +1028,8 @@ static void dec_block(nd_whistle *w, uint32_t layer, float *x, uint32_t T, void 
                 acc += sc[s] * w->v_cache[((size_t)layer * w->max_seq + s) * nv + kh * vd + e];
             o[h * vd + e] = acc;
         }
+    }
+    ND_T1(ta, ND_WP_ATTN);
     }
     for (c = 0; c < nh * vd; c++)
         o[c] *= sigm(gt[c]);
@@ -1041,6 +1050,8 @@ static void dec_block(nd_whistle *w, uint32_t layer, float *x, uint32_t T, void 
     sh_lin(w, &si, X + X_GATE, gt);
     sh_end(&si);
     }
+    {
+    ND_T0(ta);
     for (h = 0; h < nh; h++) {
         const float *K = w->cross_k + ((size_t)layer * nh + h) * w->enc_T * qk;
         const float *V = w->cross_v + ((size_t)layer * nh + h) * w->enc_T * vd;
@@ -1058,6 +1069,8 @@ static void dec_block(nd_whistle *w, uint32_t layer, float *x, uint32_t T, void 
                 acc += sc[s] * V[(size_t)s * vd + e];
             o[h * vd + e] = acc;
         }
+    }
+    ND_T1(ta, ND_WP_ATTN);
     }
     for (c = 0; c < nh * vd; c++)
         o[c] *= sigm(gt[c]);
@@ -1152,7 +1165,8 @@ static void dec_step(nd_whistle *w, uint32_t tok, uint32_t pos, float *hid)
 
 static void logits_all(nd_whistle *w, const float *hid, float *out)
 {
-    lin(w, w->i_emb, hid, 1, out);       /* tied head: 8199 x 512, 4-bit */
+    /* tied head: 8199 x 512, 4-bit */
+    lin_rows(w, w->i_emb, hid, 1, 0, w->t[w->i_emb].shape[0], out, ND_WP_HEAD);
 }
 
 int nd_whistle_logits(nd_whistle *w, const float *enc, uint32_t T,

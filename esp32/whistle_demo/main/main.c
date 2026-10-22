@@ -248,7 +248,7 @@ static float noise_floor(void)
 static void transcribe(float *x, uint32_t n)
 {
     static const char *PN[ND_WP_COUNT] = { "mel", "stem", "encoder", "cross_kv", "decoder",
-                                           "~matmul", "~mlp", "~attn", "~mhc" };
+                                           "~matmul", "~mlp", "~attn", "~mhc", "~head" };
     uint32_t s0 = 0, s1 = n, T, ids[96], i;
     float    floor_rms = noise_floor(), peak = 0.0f, *enc;
     int      nt;

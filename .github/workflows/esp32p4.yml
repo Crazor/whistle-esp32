@@ -11,8 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Pick the apps whose inputs changed. Anything under `shared` rebuilds both;
-  # a manual run always builds both.
+  # Pick the apps whose inputs changed. Anything under `shared` rebuilds them
+  # all; a manual run always builds them all.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -38,12 +38,17 @@ jobs:
             mic_test:
               - *shared
               - esp32/mic_test/**
+            nd_bench:
+              - *shared
+              - esp32/nd_bench/**
+              - esp32/needle_demo/components/**
+              - engine/**
       - id: pick
         env:
           CHANGES: ${{ steps.filter.outputs.changes }}
         run: |
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
-            apps='["whistle_demo","mic_test"]'
+            apps='["whistle_demo","mic_test","nd_bench"]'
           else
             apps="$(jq -c 'map(select(. != "shared"))' <<<"$CHANGES")"
           fi

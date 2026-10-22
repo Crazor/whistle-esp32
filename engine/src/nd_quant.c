@@ -13,6 +13,7 @@
 #define ND_QUANT_ALLOC(n) malloc(n)
 #define ND_QUANT_FREE(p)  free(p)
 #endif
+#include "nd_simd.h"
 
 #include <math.h>
 #include <string.h>
@@ -490,71 +491,6 @@ void nd_cq_gemm_prepared(const nd_cact *c, const nd_tensor *t, const void *blob,
 
 int nd_cq_int8 = 1;
 
-static int32_t dot128_ref(const int8_t *a, const int8_t *b)
-{
-    int32_t  r = 0;
-    uint32_t i;
-    for (i = 0; i < 128; i++)
-        r += (int32_t)a[i] * b[i];
-    return r;
-}
-
-/* sum(a[i] * b[i]) over 128 int8s; both 16-byte aligned. */
-static ND_HOT int32_t dot128_s8(const int8_t *a, const int8_t *b)
-{
-#if defined(ESP_PLATFORM) && defined(CONFIG_IDF_TARGET_ESP32S3)
-    int32_t r;
-    __asm__ volatile(
-        "ee.zero.accx\n"
-        "ee.vld.128.ip q0, %1, 16\n"  "ee.vld.128.ip q1, %2, 16\n"
-        "ee.vld.128.ip q2, %1, 16\n"  "ee.vld.128.ip q3, %2, 16\n"
-        "ee.vmulas.s8.accx q0, q1\n"
-        "ee.vld.128.ip q4, %1, 16\n"  "ee.vld.128.ip q5, %2, 16\n"
-        "ee.vmulas.s8.accx q2, q3\n"
-        "ee.vld.128.ip q6, %1, 16\n"  "ee.vld.128.ip q7, %2, 16\n"
-        "ee.vmulas.s8.accx q4, q5\n"
-        "ee.vld.128.ip q0, %1, 16\n"  "ee.vld.128.ip q1, %2, 16\n"
-        "ee.vmulas.s8.accx q6, q7\n"
-        "ee.vld.128.ip q2, %1, 16\n"  "ee.vld.128.ip q3, %2, 16\n"
-        "ee.vmulas.s8.accx q0, q1\n"
-        "ee.vld.128.ip q4, %1, 16\n"  "ee.vld.128.ip q5, %2, 16\n"
-        "ee.vmulas.s8.accx q2, q3\n"
-        "ee.vld.128.ip q6, %1, 16\n"  "ee.vld.128.ip q7, %2, 16\n"
-        "ee.vmulas.s8.accx q4, q5\n"
-        "ee.vmulas.s8.accx q6, q7\n"
-        "rur.accx_0 %0\n"           /* |sum| <= 128*127*127: fits 32 bits */
-        : "=r"(r), "+r"(a), "+r"(b) :: "memory");
-    return r;
-#elif defined(ESP_PLATFORM) && defined(CONFIG_IDF_TARGET_ESP32P4)
-    /* The same kernel in the P4's RISC-V PIE. Revisions < 3 (xesppie) and
-     * >= 3 (xespv) encode these differently; -march picks the encoding. */
-    int32_t r;
-    __asm__ volatile(
-        "esp.zero.xacc\n"
-        "esp.vld.128.ip q0, %1, 16\n"  "esp.vld.128.ip q1, %2, 16\n"
-        "esp.vld.128.ip q2, %1, 16\n"  "esp.vld.128.ip q3, %2, 16\n"
-        "esp.vmulas.s8.xacc q0, q1\n"
-        "esp.vld.128.ip q4, %1, 16\n"  "esp.vld.128.ip q5, %2, 16\n"
-        "esp.vmulas.s8.xacc q2, q3\n"
-        "esp.vld.128.ip q6, %1, 16\n"  "esp.vld.128.ip q7, %2, 16\n"
-        "esp.vmulas.s8.xacc q4, q5\n"
-        "esp.vld.128.ip q0, %1, 16\n"  "esp.vld.128.ip q1, %2, 16\n"
-        "esp.vmulas.s8.xacc q6, q7\n"
-        "esp.vld.128.ip q2, %1, 16\n"  "esp.vld.128.ip q3, %2, 16\n"
-        "esp.vmulas.s8.xacc q0, q1\n"
-        "esp.vld.128.ip q4, %1, 16\n"  "esp.vld.128.ip q5, %2, 16\n"
-        "esp.vmulas.s8.xacc q2, q3\n"
-        "esp.vld.128.ip q6, %1, 16\n"  "esp.vld.128.ip q7, %2, 16\n"
-        "esp.vmulas.s8.xacc q4, q5\n"
-        "esp.vmulas.s8.xacc q6, q7\n"
-        "esp.movx.r.xacc.l %0\n"     /* |sum| <= 128*127*127: fits 32 bits */
-        : "=r"(r), "+r"(a), "+r"(b) :: "memory");
-    return r;
-#else
-    return dot128_ref(a, b);
-#endif
-}
-
 int nd_cq_int8_check(void)
 {
     static int8_t a[128] __attribute__((aligned(16))), b[128] __attribute__((aligned(16)));
@@ -565,7 +501,7 @@ int nd_cq_int8_check(void)
             a[i] = k == 0 ? 127 : k == 1 ? -128 : (int8_t)(s >> 16);
             b[i] = k < 2 ? -128 : (int8_t)(s >> 24);
         }
-        if (dot128_s8(a, b) != dot128_ref(a, b))
+        if (nd_dot128_s8(a, b) != nd_dot128_ref(a, b))
             return -1;
     }
     return 0;
@@ -612,7 +548,7 @@ static ND_HOT void gemm8_rows(void *vc, uint32_t r0, uint32_t r1)
             const float  *sx = g->sx + (size_t)k * ngroup;
             float         acc = 0.0f;
             for (gi = 0; gi < ngroup; gi++)
-                acc += nrm[gi] * sx[gi] * (float)dot128_s8(wq + gi * 128, x + gi * 128);
+                acc += nrm[gi] * sx[gi] * (float)nd_dot128_s8(wq + gi * 128, x + gi * 128);
             g->y[(size_t)k * g->ystride + r] = acc;
         }
     }
