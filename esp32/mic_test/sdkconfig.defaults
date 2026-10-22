@@ -1,19 +1,20 @@
-# Same board settings as needle_demo -- see the README's Troubleshooting.
-CONFIG_IDF_TARGET="esp32s3"
-CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+# Same board settings as whistle_demo -- see the README's Troubleshooting.
+CONFIG_IDF_TARGET="esp32p4"
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_100=y
+CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
-# Same table as needle_demo, so app-flash leaves the model partition alone.
+# Same table as whistle_demo, so app-flash leaves the model partition alone.
 CONFIG_PARTITION_TABLE_CUSTOM=y
-CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../needle_demo/partitions.csv"
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../whistle_demo/partitions.csv"
 CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_OCT=y
-CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
 CONFIG_SPIRAM_USE_MALLOC=y
-CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
 CONFIG_FREERTOS_HZ=1000
-# This board is plugged in by its native USB port, not the UART bridge. With
-# the default (UART0 primary, USB mirror), every printf also busy-waits on
-# UART0 at 115200 baud: dumping one clip took over a minute and starved the
-# idle task. Primary USB-Serial/JTAG runs at USB speed and accepts input.
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+# Console on UART0 through the board's USB bridge, fast enough that dumping a
+# clip (tools/mic_capture.py) takes seconds rather than a minute.
+CONFIG_ESP_CONSOLE_UART_CUSTOM=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=921600

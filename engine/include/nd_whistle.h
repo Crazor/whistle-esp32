@@ -116,7 +116,7 @@ int  nd_whistle_set_depth(nd_whistle *w, uint32_t depth);
 
 /* Copy the decoder's hot weights (the tied 8199-row output head, read in
  * full every token) out of the mapped blob into `alloc`ed memory - on the
- * ESP32-S3, octal PSRAM, which streams faster than the QIO flash mapping.
+ * ESP32, PSRAM, which streams faster than the QIO flash mapping.
  * Returns the bytes copied, or 0. */
 size_t nd_whistle_cache_head(nd_whistle *w, void *(*alloc)(size_t));
 

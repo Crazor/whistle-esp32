@@ -16,7 +16,7 @@
  * accessor below works on both.
  *
  * Nothing here copies or allocates: the blob is used in place, so on the
- * ESP32-S3 it can point straight at an mmap'd flash partition.
+ * ESP32 it can point straight at an mmap'd flash partition.
  */
 #ifndef ND_CACT_H
 #define ND_CACT_H
