@@ -11,7 +11,7 @@ recording, transcribing, the transcript, the timings and the LED.
 Two interchangeable backends speaking the same line protocol:
 
   --local            spawns the host engine (rehearse on the Mac)
-  --serial <port>    talks to the ESP32-S3 (the real thing)
+  --serial <port>    talks to the ESP32 (the real thing)
 
 Protocol, one message per line:
   EVT priming i/n PCT elapsed=Ns eta=Ns   one-time prefix prime at boot
@@ -109,13 +109,15 @@ class LocalBackend(Backend):
 
 
 class SerialBackend(Backend):
-    """Persistent link to the ESP32-S3."""
+    """Persistent link to the board."""
 
-    def __init__(self, port, baud=115200, assert_dtr=True):
+    def __init__(self, port, baud=921600, assert_dtr=True):
         import serial
-        # Open with both lines low: on a board plugged in by its native
-        # USB-Serial/JTAG port, pyserial's default open-time DTR/RTS glitch
-        # can latch the chip into download mode (README, Whistle section).
+        # Open with both lines low: pyserial's default open-time DTR/RTS
+        # glitch can latch the chip into download mode (README). On the
+        # ESP32-P4-WIFI6's USB bridge DTR alone pulls BOOT low, which
+        # whistle_demo reads as its push-to-talk button. 921600 baud is the
+        # Whistle firmware's console rate.
         self.s = serial.Serial()
         self.s.port, self.s.baudrate, self.s.timeout = port, baud, 0.2
         self.s.dtr, self.s.rts = False, False
@@ -124,7 +126,7 @@ class SerialBackend(Backend):
         # host asserts DTR; whistle_demo's primary one does not need it.
         if assert_dtr:
             self.s.setDTR(True)
-        self.name = "ESP32-S3 " + port.split("/")[-1]
+        self.name = "ESP32 " + port.split("/")[-1]
         self.q = queue.Queue()
         self._stop = False
         threading.Thread(target=self._reader, daemon=True).start()
@@ -472,7 +474,7 @@ def render_whistle(sess, backend_name):
     hint = {"ready": "hold the button and speak  ·  \"flash the light blue\" · \"allume la lumière verte\"",
             "self-test": "boot self-test: transcribing a built-in clip...",
             "recording": "listening...  release the button when you are done",
-            "transcribing": "transcribing on the ESP32-S3..."}.get(sess.status)
+            "transcribing": "transcribing on the ESP32..."}.get(sess.status)
     if sess.text is not None:
         t = Text()
         t.append("“", style="grey50")

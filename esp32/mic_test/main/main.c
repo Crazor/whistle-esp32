@@ -1,23 +1,18 @@
 /* mic_test - hardware check for the Whistle push-to-talk front end.
  *
- * Captures 16 kHz mono audio from an INMP441 over I2S while the button on
- * GPIO7 is held, and on release prints the clip length plus peak and RMS
- * levels. The onboard WS2812 is white while recording.
- *
- *   INMP441  SCK=GPIO4  WS=GPIO5  SD=GPIO6  L/R=GND (left slot)
- *   button   GPIO7 to GND, internal pull-up (0 = pressed)
+ * Captures 16 kHz audio from the Waveshare ESP32-P4-WIFI6's onboard
+ * microphone, through its ES8311 codec, while BOOT is held, and on release
+ * prints the clip length plus peak and RMS levels. The WS2812 on LED_GPIO is
+ * white while recording. Pins: components/board/board.h.
  *
  * The I2S channel runs continuously and samples are only kept while the
- * button is down. The INMP441 needs ~85 ms after its clock starts before the
- * output is valid, so starting the clock on every press would put a startup
- * transient at the head of every clip.
+ * button is down, so no clip starts with the codec's power-up transient.
  *
- * Both I2S slots are captured. The mic should only ever drive the left one;
- * the right slot is a wiring check. An INMP441 releases SD outside its slot,
- * so a loose L/R wire shows up as audio jumping to the right channel while
- * the left reads whatever the floating line picks up -- in testing, exact bit
- * patterns like 0xAAAA and rail-to-rail jumps. SD has a pull-down (as the
- * datasheet recommends), so an undriven slot reads as exact zeros instead.
+ * Both I2S slots are captured. Whistle reads the left one, where the codec
+ * puts its mono ADC; the right one shows what the codec sends there. Exact
+ * zeros on the left mean the codec is not running (an I2C failure in
+ * board.c stops the boot with an ESP_ERROR_CHECK message). Use the levels to tune BOARD_MIC_GAIN_6DB: speech
+ * should sit well above the noise floor without peaks near 0 dBFS.
  *
  * In (optional): 'p' / 'r' on the console press and release a virtual
  * button, so the capture path can be exercised without touching the board.
@@ -36,6 +31,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "board.h"
 #include "driver/gpio.h"
 #include "driver/i2s_std.h"
 #include "driver/rmt_tx.h"
@@ -46,11 +42,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#define MIC_SCK_GPIO   4
-#define MIC_WS_GPIO    5
-#define MIC_SD_GPIO    6
-#define BUTTON_GPIO    7
-#define ONBOARD_GPIO   48
 #define RMT_RESOLUTION 10000000      /* 10 MHz -> 100 ns per tick */
 
 #define SAMPLE_RATE    16000
@@ -59,8 +50,8 @@
 #define DEBOUNCE_MS    20
 #define HEARTBEAT_MS   5000
 
-/* The INMP441 sends 24 significant bits, MSB-aligned in a 32-bit slot, so the
- * top 16 bits are the 16-bit PCM sample. */
+/* The codec sends the sample MSB-aligned in a 32-bit slot, so the top 16
+ * bits are the 16-bit PCM sample. */
 #define PCM_SHIFT      16
 
 static rmt_channel_handle_t s_chan;
@@ -73,7 +64,7 @@ static void led_init(void)
 {
     rmt_tx_channel_config_t chan_cfg = {
         .clk_src           = RMT_CLK_SRC_DEFAULT,
-        .gpio_num          = ONBOARD_GPIO,
+        .gpio_num          = LED_GPIO,
         .mem_block_symbols = 64,
         .resolution_hz     = RMT_RESOLUTION,
         .trans_queue_depth = 4,
@@ -98,46 +89,7 @@ static void led_set(uint8_t r, uint8_t g, uint8_t b)
 
 /* --------------------------------------------------------------------- I2S */
 
-static void mic_init(void)
-{
-    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0,
-                                                            I2S_ROLE_MASTER);
-    i2s_std_config_t  std_cfg = {
-        .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(SAMPLE_RATE),
-        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT,
-                                                        I2S_SLOT_MODE_STEREO),
-        .gpio_cfg = {
-            .mclk = I2S_GPIO_UNUSED,
-            .bclk = MIC_SCK_GPIO,
-            .ws   = MIC_WS_GPIO,
-            .dout = I2S_GPIO_UNUSED,
-            .din  = MIC_SD_GPIO,
-        },
-    };
-
-    /* L/R tied to GND: the mic drives the slot where WS is low. The right
-     * slot is captured too, as a wiring check. */
-    std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_BOTH;
-
-    chan_cfg.dma_frame_num = CHUNK;
-    ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, NULL, &s_rx));
-    ESP_ERROR_CHECK(i2s_channel_init_std_mode(s_rx, &std_cfg));
-    /* After init: the I2S driver reconfigures the pin. */
-    ESP_ERROR_CHECK(gpio_pulldown_en(MIC_SD_GPIO));
-    ESP_ERROR_CHECK(i2s_channel_enable(s_rx));
-}
-
-static void button_init(void)
-{
-    gpio_config_t cfg = {
-        .pin_bit_mask = 1ULL << BUTTON_GPIO,
-        .mode         = GPIO_MODE_INPUT,
-        .pull_up_en   = GPIO_PULLUP_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_DISABLE,
-    };
-    ESP_ERROR_CHECK(gpio_config(&cfg));
-}
+static void mic_init(void) { board_mic_init(SAMPLE_RATE, CHUNK, 1, &s_rx); }
 
 /* ------------------------------------------------------------------- output */
 
@@ -168,8 +120,8 @@ static void report(const int16_t *pcm, size_t n, int ch)
             jumps++;
     }
     mean = sum / n;
-    /* RMS around the mean: the INMP441 has a small DC offset, which would
-     * otherwise put a floor under the "silent" figure. */
+    /* RMS around the mean: any DC offset left after the codec's DC removal
+     * would otherwise put a floor under the "silent" figure. */
     for (i = 0; i < n; i++) {
         double d = pcm[2 * i + ch] - mean;
         sq += d * d;
@@ -207,9 +159,8 @@ static void dump_pcm(const int16_t *pcm, size_t n)
             line[k] = '\0';
             printf("PCM %s\n", line);
             k = 0;
-            /* 1 ms per 128-char line, ~128 KB/s: slow enough that the host's
-             * polling keeps up and the driverless console drops nothing.
-             * Also lets the idle task run during a long dump. */
+            /* 1 ms per 128-char line: lets the idle task run during a long
+             * dump. The UART console blocks rather than dropping bytes. */
             fflush(stdout);
             vTaskDelay(1);
         }
@@ -219,11 +170,7 @@ static void dump_pcm(const int16_t *pcm, size_t n)
 
 /* ----------------------------------------------------------------- console */
 
-/* The console stays on the default driverless USB-Serial/JTAG path, which
- * never blocks: it drops bytes if the host is slow to poll. Installing the
- * driver (blocking writes) was tried and hung the loop in fflush() straight
- * after a dump, leaving the button dead. Dropped bytes are handled instead by
- * pacing the dump (dump_pcm) and by mic_capture.py tolerating bad lines. */
+/* The console is UART0 without its driver, through the board's USB bridge. */
 static void console_init(void)
 {
     /* Non-blocking stdin, for the 'p' / 'r' virtual button. */
@@ -246,7 +193,7 @@ void app_main(void)
     console_init();
     led_init();
     led_set(0, 0, 0);
-    button_init();
+    board_button_init();
     mic_init();
 
     clip = heap_caps_malloc(2 * cap * sizeof(int16_t), MALLOC_CAP_SPIRAM);
@@ -257,7 +204,7 @@ void app_main(void)
     printf("EVT mic_test ready rate=%d max_secs=%d psram_free=%u\n",
            SAMPLE_RATE, MAX_SECS,
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
-    printf("EVT hold the button on GPIO%d and speak\n", BUTTON_GPIO);
+    printf("EVT hold BOOT (GPIO%d) and speak\n", BUTTON_GPIO);
     fflush(stdout);
 
     for (;;) {

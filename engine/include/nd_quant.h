@@ -181,11 +181,17 @@ void nd_cq_gemm_prepared(const nd_cact *c, const nd_tensor *t, const void *blob,
 /* Batched matmuls run in int8 when this is set (the default) and the tensor
  * is 2- or 4-bit with 128-wide groups: weights decode exactly to int8 codebook
  * levels, activations get one int8 scale per group, and the float group norm
- * is applied after each integer dot. On the ESP32-S3 the dots use the PIE
- * vector unit (16 multiply-adds per instruction); elsewhere a C loop computes
- * the same integers, so the host build checks what the board does. Set to 0
- * for the float path (tools/check_whistle.py's tight NumPy comparison). */
+ * is applied after each integer dot. On the ESP32-S3 and ESP32-P4 the dots
+ * use the PIE vector unit (16 multiply-adds per instruction); elsewhere a C
+ * loop computes the same integers, so the host build checks what the board
+ * does. Set to 0 for the float path (tools/check_whistle.py's tight NumPy
+ * comparison). */
 extern int nd_cq_int8;
+
+/* Compare the vector dot against the C loop on fixed patterns, including the
+ * extremes. Returns 0 when they agree. A wrong kernel would not crash, only
+ * make transcripts quietly worse, so the firmware runs this at boot. */
+int nd_cq_int8_check(void);
 
 /* An activation batch ready for the int8 path: T rows of the Hadamard-domain
  * activation as int8, one scale per 128-wide group. Prepare it once and run

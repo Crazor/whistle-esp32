@@ -1,8 +1,8 @@
-# Whistle speech recognition on an ESP32-S3
+# Whistle speech recognition on an ESP32-P4
 
 Hold a button and say *"flash the light blue"*. The LED flashes blue.
 
-The speech recognition runs entirely on a $10 microcontroller: no network, no
+The speech recognition runs entirely on a microcontroller: no network, no
 cloud, no phone. It transcribes whatever you say rather than matching a fixed
 list of phrases, and it understands commands in seven languages.
 
@@ -15,45 +15,60 @@ dependencies, checked tensor by tensor against the official engine.
 
 | Part | Notes |
 |---|---|
-| ESP32-S3 board, **N16R8** | 16 MB flash and 8 MB **octal** PSRAM. The model alone is 14.5 MB. ESP32-S3-DevKitC-1 N16R8 or a clone. |
-| INMP441 I²S microphone module | the common round breakout board |
-| Momentary push button | any tactile switch |
-| Jumper wires, breadboard | 8 wires |
-| USB cable | to the board's native **USB** port |
+| [Waveshare ESP32-P4-WIFI6](https://www.waveshare.com/esp32-p4-wifi6.htm) | ESP32-P4NRW32: 32 MB PSRAM in the package, 32 MB flash. The model alone is 14.5 MB. |
+| WS2812 RGB LED | a single-pixel breakout; the board has no RGB LED of its own |
+| USB-C cable | to the board's Type-C port (the USB-UART bridge) |
 
-The RGB LED is the WS2812 that is already on the board.
+The microphone (an onboard mic behind the ES8311 codec) and the push-to-talk
+button (**BOOT**) are already on the board.
+
+This port started from an ESP32-S3 build; `whistle_demo` and `mic_test` now
+target the P4. `needle_demo`, `led_probe` and `psram_test` are still the S3
+versions.
 
 ## Wiring
 
-![Wiring diagram: INMP441 and push button on an ESP32-S3](docs/wiring.svg)
+Only the LED needs wiring:
 
 | From | To | |
 |---|---|---|
-| INMP441 VDD | 3V3 | 3.3 V, not 5 V |
-| INMP441 GND | GND | |
-| INMP441 L/R | GND | picks the left channel, which the firmware reads |
-| INMP441 SCK | GPIO4 | I²S bit clock |
-| INMP441 WS | GPIO5 | I²S word select |
-| INMP441 SD | GPIO6 | I²S data |
-| Button | GPIO7 and GND | the internal pull-up is used, so no resistor |
-| WS2812 LED | GPIO48 | on the board already |
+| WS2812 VCC | 3V3 or 5V | per your breakout; 5 V parts usually take a 3.3 V data line at this length |
+| WS2812 GND | GND | |
+| WS2812 DIN | GPIO23 | `LED_GPIO` in `esp32/components/board/include/board.h` |
 
-Clone boards place header pins differently, so go by the GPIO numbers printed
-on your board. If your LED sits on another pin (DevKitC-1 v1.1 uses GPIO38),
-change `ONBOARD_GPIO` at the top of `esp32/whistle_demo/main/main.c`. A
-[PNG version](docs/wiring.png) of the diagram is there for printing.
+The 40-pin header follows the Raspberry Pi Pico pinout, but Waveshare documents
+it only as a picture. **Check the silkscreen** for where GPIO23 is, or change
+`LED_GPIO`. `board.h` lists the pins the board already uses.
 
-**Check the microphone before anything else.** Loose jumper wires are the
-most common fault. `esp32/mic_test` records while the button is held, and
-`tools/mic_capture.py` saves each clip as a WAV you can listen to. Speech
-should sit well above the noise floor (about -45 vs -68 dBFS) with `jumps=0`.
-Stretches of an exact bit pattern such as `0xAAAA` mean a bad SCK, WS or power
-contact.
+| Onboard | Pins |
+|---|---|
+| ES8311 I²S | MCLK GPIO13, BCLK GPIO12, WS GPIO10, ADC data GPIO11 |
+| ES8311 I²C | SDA GPIO7, SCL GPIO8, address 0x18 |
+| BOOT button | GPIO35 |
+
+**Check the microphone before anything else.** `esp32/mic_test` records while
+BOOT is held, and `tools/mic_capture.py` saves each clip as a WAV you can
+listen to. Speech should sit well above the noise floor, with peaks well under
+0 dBFS. Set the codec gain with `BOARD_MIC_GAIN_6DB` in `board.h`.
 
 ## Setup
 
-You need [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/)
+You need [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/esp32p4/get-started/)
 v5.5 or newer, Python 3 and CMake.
+
+**Check the chip revision first.** The build targets revision 3.x, as current
+boards carry (v3.2 here). Earlier boards shipped with v1.x chips (v1.3), and
+the two are not binary compatible:
+
+```bash
+esptool.py --chip esp32p4 -p /dev/ttyACM0 chip_id    # "Chip is ESP32-P4 (revision v3.2)"
+```
+
+On a v1.x chip, add `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y` and
+`CONFIG_ESP32P4_REV_MIN_100=y` to `sdkconfig.defaults` in `esp32/whistle_demo`
+and `esp32/mic_test`. Also replace `ESP_DEFAULT_CPU_FREQ_MHZ_400` with
+`ESP_DEFAULT_CPU_FREQ_MHZ_360`, since 1.x tops out there. Then delete
+`sdkconfig` and `build` and rebuild.
 
 On Debian or Ubuntu, including a fresh cloud container, `./setup-linux.sh`
 installs all of it: system packages, `.venv` from `requirements.txt`, and
@@ -75,28 +90,34 @@ shutil.copy(hf_hub_download('Cactus-Compute/whistle','whistle.cact'), 'model/whi
 # 3. firmware (ESP-IDF must be on PATH)
 . $HOME/esp/esp-idf/export.sh
 cd esp32/whistle_demo
-idf.py set-target esp32s3 && idf.py build
-idf.py -p /dev/cu.usbmodemXXXX flash          # bootloader, partition table, app
+idf.py set-target esp32p4 && idf.py build
+idf.py -p /dev/ttyACM0 flash                  # bootloader, partition table, app
 cd ../..
 
 # 4. the model, into its own flash partition (~100 s)
-esptool.py --chip esp32s3 -p /dev/cu.usbmodemXXXX -b 921600 \
+esptool.py --chip esp32p4 -p /dev/ttyACM0 -b 921600 \
     write_flash 0x210000 model/whistle/whistle_d4.cact
 ```
 
 Find the port with `ls /dev/cu.usb*` (macOS) or `ls /dev/ttyACM*` (Linux).
+The console runs at 921600 baud; `idf.py monitor` picks that up from the
+build, and the tools here default to it.
 The model only needs flashing once. After a code change, repeat step 3.
 
-**Why cut the model down?** The full model is bigger than the board's entire
-flash. Whistle's decoder is laddered: every depth from 2 layers up was trained
-to work on its own. `whistle_strip.py` keeps only the layers a depth uses.
-Depth 4 fits once the model partition runs to the end of flash
-(`esp32/whistle_demo/partitions.csv`).
+**Why cut the model down?** The full model is bigger than the 16 MB flash of
+the S3 board this started on. Whistle's decoder is laddered: every depth from
+2 layers up was trained to work on its own. `whistle_strip.py` keeps only the
+layers a depth uses. The P4 board's 32 MB flash also holds the full model, but
+the accuracy figures below were measured and tuned at depth 4.
+
+At boot the firmware copies the model from flash into PSRAM (`EVT
+model_in_psram`). PSRAM streams the weights far faster than the flash
+mapping.
 
 ### Watching it work
 
 ```bash
-.venv/bin/python tools/needle_tui.py --whistle --serial /dev/cu.usbmodemXXXX
+.venv/bin/python tools/needle_tui.py --whistle --serial /dev/ttyACM0
 ```
 
 The console shows each transcript, the detected language, the LED action and
@@ -107,7 +128,7 @@ the time each phase took. The board works without it, too.
 The LED glows dim blue for about a second while the model loads, then goes
 off. That means it is ready.
 
-1. **Hold** the button. The LED turns **white** while it records.
+1. **Hold** BOOT. The LED turns **white** while it records.
 2. **Say** a command.
 3. **Release.** The LED **pulses dimly** while it transcribes, then does what
    you said.
@@ -150,7 +171,12 @@ language, as in *toutes les deux secondes* or *alle zwei Sekunden*.
 
 ## Performance
 
-Measured on the board at 240 MHz, depth 4, for a 2-second English command:
+**Not yet measured on the P4.** The figures below are from the ESP32-S3 at
+240 MHz. The P4 runs at 400 MHz (revision 3.x) with the model in 200 MHz hex
+PSRAM rather than QIO flash, so it should be considerably faster. The firmware
+prints the same per-phase timings (`EVT prof ...`).
+
+On the S3, depth 4, for a 2-second English command:
 
 | Phase | Time |
 |---|---|
@@ -164,8 +190,12 @@ The longer you speak, the longer it takes, because the encoder sees every
 80 ms frame. Other languages use more tokens: a 3.2-second French sentence
 takes 12.6 s.
 
-The matmuls run in **int8 on the S3's PIE vector unit**, 16 multiply-adds per
-instruction. Whistle's weights decode exactly to int8 codebook levels and
+The matmuls run in **int8 on the PIE vector unit**, 16 multiply-adds per
+instruction. PIE is Espressif's SIMD extension: 128-bit registers holding
+16 int8 values. The S3 has an Xtensa version (`ee.*` instructions) and the
+P4 a RISC-V one (`esp.*`), so `nd_quant.c` has a kernel for each. The
+firmware checks the kernel against plain C at boot
+(`ERR int8_kernel_mismatch` if they disagree). Whistle's weights decode exactly to int8 codebook levels and
 activations get one scale per 128-wide group, so accuracy does not change
 (80% of colour commands right in int8 vs 78% in float, on 360 test clips).
 The first working build took 23.9 s for the same command.
@@ -174,7 +204,9 @@ The first working build took 23.9 s for the same command.
 
 Command accuracy means the colour and flash/solid are both right. It was
 measured on synthetic voices (macOS voices, five phrasings, six colours), both
-clean and mixed with real INMP441 noise. The second row scores Cactus's own
+clean and mixed with real INMP441 noise, on the S3 build with its external
+INMP441 microphone. The ES8311 path on the P4 board has not been scored yet.
+The second row scores Cactus's own
 full-size model, run through the official engine and the same parser:
 
 | | en | de | fr | es | it | nl | pl |
@@ -204,22 +236,21 @@ utterances (depth 2: 15.3%). `tools/eval_whistle.py` and
 Most of these fail **silently**. The board keeps running and the model keeps
 producing plausible text.
 
-**No serial output.** This firmware uses the native USB port's console
-(`CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`). If your board is plugged in through
-its UART bridge instead, remove that line from `sdkconfig.defaults`, delete
-`sdkconfig` and rebuild.
+**No serial output, or garbage.** The console is UART0 through the board's
+USB bridge at **921600** baud. The ROM bootloader's first lines are at 115200
+and show as garbage at 921600, which is harmless.
 
-**The board sits at `waiting for download`.** Opening the native port with
-pyserial's defaults can latch the chip into download mode. The tools here open
-it with DTR and RTS low. To reset, run
-`esptool.py --after watchdog_reset read_mac`.
+**It records by itself, or never stops recording.** On this board's USB
+bridge DTR is wired to BOOT, the push-to-talk button. A terminal that asserts
+DTR holds the button down. The tools here keep DTR and RTS low. Configure
+other terminals the same way.
 
-**Boot loop with no error message.** The PSRAM line mode is wrong. 8 MB parts
-are octal (`CONFIG_SPIRAM_MODE_OCT=y`). The defaults here already set it.
+**The bootloader refuses the image, or the app crashes at once.** The build
+was made for the wrong chip revision. See Setup.
 
-**It works but is about 1.5x too slow.** ESP-IDF defaults the S3 to 160 MHz.
-`CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y` is the documented maximum, not an
-overclock, and the defaults here already set it.
+**ESP_ERROR_CHECK failed in `board.c` at boot.** The ES8311 did not answer
+on I²C. The codec gets its clock from MCLK, so it is configured after the I²S
+channel starts.
 
 **"Thank you." from an empty room.** Whistle, the official engine included,
 transcribes ten seconds of microphone noise as "Thank you." The firmware
@@ -233,11 +264,11 @@ Clipping hurts more than low volume, because the engine normalises gain
 anyway.
 
 **A click lowers the gain of everything else.** The engine scales each clip to
-a peak of 1. A single spike, such as a button click or the INMP441's ~85 ms
-startup transient, shrinks the speech. The firmware keeps the mic clock
-running and drops the first few ms after the button closes.
+a peak of 1. A single spike, such as a button click, shrinks the speech. The
+firmware keeps the mic clock running and drops the first few ms after the
+button closes.
 
-**No `double` on the board.** The S3's FPU is single precision, so `double`
+**No `double` on the board.** The S3's and P4's FPUs are single precision, so `double`
 is emulated in software. One double accumulator and a double FFT twiddle made
 a 2-second clip take 24 s. The output was still correct, so nothing on the
 host showed the problem.
@@ -297,8 +328,9 @@ engine/              portable C99 engine, no dependencies
   nd_quant.c           Cactus-Quants kernels, including the int8 PIE path
   nd_cact.c            .cact v3/v4 container reader
   nd_model.c, ...      Needle 2 (see below)
-esp32/whistle_demo/  push-to-talk speech -> LED firmware
-esp32/mic_test/      microphone and button check
+esp32/whistle_demo/  push-to-talk speech -> LED firmware (ESP32-P4)
+esp32/mic_test/      microphone and button check (ESP32-P4)
+esp32/components/board/  ESP32-P4-WIFI6 pins and its ES8311 microphone
 esp32/needle_demo/   the Needle 2 demo; also holds the engine's ESP-IDF component
 host/                wh_run and other host tools
 tools/               console UI, model tools, references, evaluation

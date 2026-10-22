@@ -10,7 +10,7 @@ endif()
 
 idf_component_register(SRCS "main.c"
                        ${ST_EMBED}
-                       REQUIRES needle esp_driver_i2s esp_driver_rmt esp_driver_gpio
+                       REQUIRES needle board esp_driver_i2s esp_driver_rmt esp_driver_gpio
                                 esp_partition esp_timer)
 if(WHISTLE_SELFTEST AND EXISTS "${ST}")
     target_compile_definitions(${COMPONENT_LIB} PRIVATE HAVE_SELFTEST)

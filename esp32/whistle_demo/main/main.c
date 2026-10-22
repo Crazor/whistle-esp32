@@ -1,13 +1,14 @@
-/* Whistle on ESP32-S3: hold the button, say a command, the LED does it.
+/* Whistle on ESP32-P4: hold the button, say a command, the LED does it.
  *
  * Speech recognition runs entirely on the chip. The depth-4 Whistle model
- * (tools/whistle_strip.py, 14.5 MB) lives in the "model" partition, grown to
- * the end of flash (partitions.csv), and is memory-mapped; the output head is
- * copied to octal PSRAM, which streams faster than the flash mapping.
+ * (tools/whistle_strip.py, 14.5 MB) lives in the "model" partition and is
+ * copied at boot into the 32 MB PSRAM, which streams far faster than the QIO
+ * flash mapping. Without room for it there, it is used memory-mapped.
  *
- *   INMP441  SCK=GPIO4  WS=GPIO5  SD=GPIO6  L/R=GND (left slot)
- *   button   GPIO7 to GND, internal pull-up (0 = pressed)
- *   LED      onboard WS2812 on GPIO48
+ * Board: Waveshare ESP32-P4-WIFI6 (pins in components/board/board.h)
+ *   mic      onboard, through the ES8311 codec
+ *   button   BOOT (GPIO35)
+ *   LED      external WS2812 on LED_GPIO
  *
  * LED: dim blue for the second it takes to load, then off (listening);
  * white while recording, a dim pulse while transcribing, then the command;
@@ -22,6 +23,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "board.h"
 #include "driver/gpio.h"
 #include "driver/i2s_std.h"
 #include "driver/rmt_tx.h"
@@ -36,11 +38,6 @@
 #include "nd_quant.h"
 #include "nd_whistle.h"
 
-#define MIC_SCK_GPIO   4
-#define MIC_WS_GPIO    5
-#define MIC_SD_GPIO    6
-#define BUTTON_GPIO    7
-#define ONBOARD_GPIO   48
 #define RMT_RESOLUTION 10000000      /* 10 MHz -> 100 ns per tick */
 
 #define SAMPLE_RATE    16000
@@ -124,7 +121,7 @@ static void led_init(void)
 {
     rmt_tx_channel_config_t chan_cfg = {
         .clk_src           = RMT_CLK_SRC_DEFAULT,
-        .gpio_num          = ONBOARD_GPIO,
+        .gpio_num          = LED_GPIO,
         .mem_block_symbols = 64,
         .resolution_hz     = RMT_RESOLUTION,
         .trans_queue_depth = 4,
@@ -221,35 +218,7 @@ static void worker_start(void)
 
 static i2s_chan_handle_t s_rx;
 
-static void mic_init(void)
-{
-    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-    i2s_std_config_t  std_cfg = {
-        .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(SAMPLE_RATE),
-        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT,
-                                                        I2S_SLOT_MODE_MONO),
-        .gpio_cfg = {
-            .mclk = I2S_GPIO_UNUSED, .bclk = MIC_SCK_GPIO, .ws = MIC_WS_GPIO,
-            .dout = I2S_GPIO_UNUSED, .din = MIC_SD_GPIO,
-        },
-    };
-    std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_LEFT;     /* L/R tied to GND */
-    chan_cfg.dma_frame_num = CHUNK;
-    ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, NULL, &s_rx));
-    ESP_ERROR_CHECK(i2s_channel_init_std_mode(s_rx, &std_cfg));
-    ESP_ERROR_CHECK(gpio_pulldown_en(MIC_SD_GPIO));    /* undriven SD reads 0 */
-    ESP_ERROR_CHECK(i2s_channel_enable(s_rx));
-}
-
-static void button_init(void)
-{
-    gpio_config_t cfg = {
-        .pin_bit_mask = 1ULL << BUTTON_GPIO, .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE, .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    ESP_ERROR_CHECK(gpio_config(&cfg));
-}
+static void mic_init(void) { board_mic_init(SAMPLE_RATE, CHUNK, 0, &s_rx); }
 
 /* Noise floor from the last 5 s of idle audio: the 20th-percentile 20 ms
  * window. The mic runs between presses, so this is known before anyone
@@ -384,7 +353,7 @@ static void whistle_task(void *arg)
     }
 #endif
     printf("\nEVT ==================================================\n");
-    printf("EVT  READY - hold the button on GPIO%d and say a command\n", BUTTON_GPIO);
+    printf("EVT  READY - hold BOOT (GPIO%d) and say a command\n", BUTTON_GPIO);
     printf("EVT  e.g. \"flash the light blue\", \"allume la lumière verte\"\n");
     printf("EVT  languages: en de fr es it nl pl (detected)\n");
     printf("EVT ==================================================\n\n");
@@ -433,7 +402,7 @@ static void whistle_task(void *arg)
         }
 
         for (i = 0; i < m; i++) {
-            /* INMP441: 24 significant bits, MSB-aligned in the 32-bit slot. */
+            /* ES8311: the sample MSB-aligned in the 32-bit slot. */
             float v = (float)(raw[i] >> 16) / 32768.0f;
             if (recording) {
                 if (n < cap)
@@ -458,19 +427,58 @@ static void whistle_task(void *arg)
     }
 }
 
+/* Copy the .cact at the start of the mapped partition into PSRAM. The blob
+ * records no total size, so it ends where its last tensor does. Returns the
+ * copy and its size, or NULL to keep using the mapping. */
+static void *model_to_psram(const void *blob, size_t avail, size_t *size)
+{
+    nd_cact   c;
+    nd_tensor t;
+    size_t    end = 0;
+    uint32_t  i;
+    void     *p;
+    int64_t   t0 = esp_timer_get_time();
+
+    if (nd_cact_open(&c, blob, avail) != 0)
+        return NULL;
+    for (i = 0; i < c.n; i++)
+        if (nd_cact_tensor(&c, i, &t) == 0 && t.offset + t.nbytes > end)
+            end = (size_t)(t.offset + t.nbytes);
+    if (end == 0 || end > avail)
+        return NULL;                        /* let nd_whistle_open report it */
+    p = heap_caps_aligned_alloc(ND_CACT_ALIGN, end, MALLOC_CAP_SPIRAM);
+    if (!p) {
+        printf("EVT model_in_flash (no %u bytes of PSRAM free)\n", (unsigned)end);
+        return NULL;
+    }
+    memcpy(p, blob, end);
+    printf("EVT model_in_psram bytes=%u ms=%.0f\n", (unsigned)end,
+           (esp_timer_get_time() - t0) / 1000.0);
+    *size = end;
+    return p;
+}
+
 void app_main(void)
 {
     const esp_partition_t      *part;
     esp_partition_mmap_handle_t handle;
     const void                 *blob = NULL;
+    void                       *copy;
+    size_t                      size;
     int                         rc;
 
     vTaskDelay(pdMS_TO_TICKS(500));
     led_init();
     led_set(0, 0, 8);                       /* dim blue: booting */
     worker_start();
-    button_init();
+    board_button_init();
     mic_init();
+    if (nd_cq_int8_check() != 0) {
+        /* Transcripts would still come out, just worse: say so loudly and
+         * use the float path. */
+        printf("ERR int8_kernel_mismatch (falling back to float)\n");
+        nd_cq_int8 = 0;
+    }
 
     part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 0x40, "model");
     if (!part) {
@@ -481,7 +489,13 @@ void app_main(void)
         printf("ERR mmap_failed size=%u\n", (unsigned)part->size);
         return;
     }
-    rc = nd_whistle_open(&s_w, blob, part->size);
+    size = part->size;
+    copy = model_to_psram(blob, size, &size);
+    if (copy) {
+        esp_partition_munmap(handle);
+        blob = copy;
+    }
+    rc = nd_whistle_open(&s_w, blob, size);
     if (rc != 0) {
         /* -1..-5: no valid .cact at 0x210000; -6: a .cact that is not v4
          * (e.g. needle2.cact is still flashed there). */
@@ -499,7 +513,7 @@ void app_main(void)
             nd_whistle_add_keywords(&s_w, k, nd_led_keywords(k));
         s_w.accept = has_command;
     }
-    {
+    if (!copy) {
         int64_t t = esp_timer_get_time();
         size_t  n = nd_whistle_cache_head(&s_w, psram_alloc);
         printf("EVT head_in_psram bytes=%u ms=%.0f\n", (unsigned)n,
