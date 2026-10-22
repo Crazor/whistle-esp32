@@ -1,0 +1,96 @@
+name: ESP32-P4 firmware
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Pick the apps whose inputs changed. Anything under `shared` rebuilds both;
+  # a manual run always builds both.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      apps: ${{ steps.pick.outputs.apps }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name != 'workflow_dispatch'
+        with:
+          filters: |
+            shared: &shared
+              - .github/workflows/esp32p4.yml
+              - tools/check_sdkconfig.sh
+              - esp32/components/**
+              # mic_test uses whistle_demo's partition table.
+              - esp32/whistle_demo/partitions.csv
+            whistle_demo:
+              - *shared
+              - esp32/whistle_demo/**
+              - esp32/needle_demo/components/**
+              - engine/**
+            mic_test:
+              - *shared
+              - esp32/mic_test/**
+      - id: pick
+        env:
+          CHANGES: ${{ steps.filter.outputs.changes }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            apps='["whistle_demo","mic_test"]'
+          else
+            apps="$(jq -c 'map(select(. != "shared"))' <<<"$CHANGES")"
+          fi
+          echo "apps=$apps" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: ${{ matrix.app }}
+    needs: changes
+    if: needs.changes.outputs.apps != '[]'
+    runs-on: ubuntu-latest
+    # Same ESP-IDF version that setup-linux.sh installs.
+    container: espressif/idf:v5.5.6
+    strategy:
+      fail-fast: false
+      matrix:
+        app: ${{ fromJSON(needs.changes.outputs.apps) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The model is flashed to its own partition and is not needed to build.
+      - name: Build
+        shell: bash
+        working-directory: esp32/${{ matrix.app }}
+        run: |
+          . "$IDF_PATH/export.sh" >/dev/null
+          idf.py set-target esp32p4
+          idf.py build
+
+      - name: Check sdkconfig.defaults took effect
+        shell: bash
+        run: tools/check_sdkconfig.sh esp32/${{ matrix.app }}
+
+      - name: Size
+        shell: bash
+        working-directory: esp32/${{ matrix.app }}
+        run: |
+          . "$IDF_PATH/export.sh" >/dev/null
+          idf.py size
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.app }}-esp32p4
+          path: |
+            esp32/${{ matrix.app }}/build/*.bin
+            esp32/${{ matrix.app }}/build/*.elf
+            esp32/${{ matrix.app }}/build/bootloader/bootloader.bin
+            esp32/${{ matrix.app }}/build/partition_table/partition-table.bin
+            esp32/${{ matrix.app }}/build/flasher_args.json
+            esp32/${{ matrix.app }}/sdkconfig
+          if-no-files-found: error
