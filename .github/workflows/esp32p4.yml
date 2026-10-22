@@ -1,0 +1,56 @@
+name: ESP32-P4 firmware
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.app }}
+    runs-on: ubuntu-latest
+    # Same ESP-IDF version that setup-linux.sh installs.
+    container: espressif/idf:v5.5.6
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [whistle_demo, mic_test]
+    steps:
+      - uses: actions/checkout@v4
+
+      # The model is flashed to its own partition and is not needed to build.
+      - name: Build
+        shell: bash
+        working-directory: esp32/${{ matrix.app }}
+        run: |
+          . "$IDF_PATH/export.sh" >/dev/null
+          idf.py set-target esp32p4
+          idf.py build
+
+      - name: Check sdkconfig.defaults took effect
+        shell: bash
+        run: tools/check_sdkconfig.sh esp32/${{ matrix.app }}
+
+      - name: Size
+        shell: bash
+        working-directory: esp32/${{ matrix.app }}
+        run: |
+          . "$IDF_PATH/export.sh" >/dev/null
+          idf.py size
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.app }}-esp32p4
+          path: |
+            esp32/${{ matrix.app }}/build/*.bin
+            esp32/${{ matrix.app }}/build/*.elf
+            esp32/${{ matrix.app }}/build/bootloader/bootloader.bin
+            esp32/${{ matrix.app }}/build/partition_table/partition-table.bin
+            esp32/${{ matrix.app }}/build/flasher_args.json
+            esp32/${{ matrix.app }}/sdkconfig
+          if-no-files-found: error
