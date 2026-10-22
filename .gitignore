@@ -12,6 +12,9 @@ esp32/*/sdkconfig
 esp32/*/sdkconfig.old
 esp32/*/managed_components/
 
+# Recordings of your voice (tools/mic_capture.py, tools/whistle_collect.py)
+clips/
+
 # Python
 .venv/
 __pycache__/

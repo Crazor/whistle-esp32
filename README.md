@@ -22,8 +22,8 @@ dependencies, checked tensor by tensor against the official engine.
 The microphone (an onboard mic behind the ES8311 codec) and the push-to-talk
 button (**BOOT**) are already on the board.
 
-This port started from an ESP32-S3 build; `whistle_demo` and `mic_test` now
-target the P4. `needle_demo`, `led_probe` and `psram_test` are still the S3
+This port started from an ESP32-S3 build; `whistle_demo`, `whistle_stt` and
+`mic_test` target the P4. `needle_demo`, `led_probe` and `psram_test` are still the S3
 versions.
 
 ## Wiring
@@ -65,8 +65,8 @@ esptool.py --chip esp32p4 -p /dev/ttyACM0 chip_id    # "Chip is ESP32-P4 (revisi
 ```
 
 On a v1.x chip, add `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y` and
-`CONFIG_ESP32P4_REV_MIN_100=y` to `sdkconfig.defaults` in `esp32/whistle_demo`
-and `esp32/mic_test`. Also replace `ESP_DEFAULT_CPU_FREQ_MHZ_400` with
+`CONFIG_ESP32P4_REV_MIN_100=y` to `sdkconfig.defaults` in `esp32/whistle_demo`,
+`esp32/whistle_stt` and `esp32/mic_test`. Also replace `ESP_DEFAULT_CPU_FREQ_MHZ_400` with
 `ESP_DEFAULT_CPU_FREQ_MHZ_360`, since 1.x tops out there. Then delete
 `sdkconfig` and `build` and rebuild.
 
@@ -168,6 +168,84 @@ same time.
 The blink words are *clignoter*, *parpadear*, *blinken*, *lampeggiare*,
 *knipperen* and *migać*. Numbers from one to ten and "half" work in each
 language, as in *toutes les deux secondes* or *alle zwei Sekunden*.
+
+## Speech to text: whistle_stt
+
+`esp32/whistle_stt` is a plain transcriber: hold BOOT, speak, release, and the
+text appears on the console. It has no LED and no colour commands, no keyword
+bias and no retries in other languages. It is the front end of a local voice
+assistant, and the bench its transcription is measured on. It uses
+`whistle_demo`'s partition table, so the model already in flash serves both;
+build and flash it as in step 3 of the setup, in `esp32/whistle_stt`. With
+the full `whistle.cact` flashed (31.4 MB partition, about 4.5 minutes to
+write), every depth from 2 to 8 is available.
+
+The console prints `EVT` status lines (`booting`, `ready`, `recording`,
+`transcribing`, `error ...`), the transcript as `TXT`, and then one `RES`
+line for tools:
+
+```
+RES depth=<n> lang=<setting> lang_detected=<l> audio_ms= speech_ms= encode_ms= decode_ms= total_ms= tokens= text="..."
+```
+
+Commands, one per line on the console, take effect between clips:
+
+| Command | Does |
+|---|---|
+| `set depth=<n>` | decoder layers, 2 up to the flashed model's (default: all). Switching is instant |
+| `set lang=<l>` | `auto` detects among all seven languages (default); one language (`de`) skips detection; a list (`de,en`) detects among those only |
+| `dump on` / `dump off` | after each live transcript, send the clip as transcribed (press and release clicks cut off) as `PCM` base64 lines of s16le, then `PCM end ... n=<samples> floor_dbfs=<x>` |
+| `clip n=<samples> floor_dbfs=<x>` | upload a clip of at most 8 s: base64 s16le lines, each answered `OK` before the next, then `clip end`. `floor_dbfs=none` estimates the floor from the clip |
+| `run` | transcribe the uploaded clip with the current settings, gated against the uploaded floor as when it was recorded |
+
+`set depth=4 lang=de` sets both, and `set` alone only shows the settings.
+Each answers with a line like `CFG depth=4 layers=0,3,5,7 lang=de
+model_layers=8 dump=off`, or `ERR ...`. Nothing is stored in flash: a restart
+goes back to full depth and `lang=auto`.
+
+### Recording and replaying phrases
+
+`tools/whistle_collect.py` records a session of phrases through the board.
+Put one prompt per line in `clips/<date>-<topic>/phrases.txt`, with `#`
+comments and a `# lang: de` line for the session's language:
+
+```bash
+.venv/bin/python tools/whistle_collect.py /dev/cu.usbmodem... clips/2026-10-22-licht
+```
+
+It shows each prompt; hold BOOT, say it, release. The board's transcript
+appears, Enter keeps the take and `r` drops it (so does pressing BOOT again).
+`s` skips a prompt, `f` records a free phrase and asks what you said, `q`
+quits. Other lines, such as `set depth=4`, go to the board. Each take is saved
+as `NNN.wav` (16 kHz mono s16le) with a line in `index.jsonl`: the reference
+text, the board's transcript, the noise floor, the depth and language at
+capture, and the time. Prompts already in the index are skipped, so a session
+can be continued. `clips/` holds recordings of your voice and is not
+committed.
+
+`tools/whistle_bench.py` replays sessions on the board:
+
+```bash
+.venv/bin/python tools/whistle_bench.py /dev/cu.usbmodem... clips/2026-10-22-licht \
+    --depth 3,4,8 --lang de,auto --out results.csv
+```
+
+The defaults are depths 3, 4 and 8, each with `lang=de` and `lang=auto`. It
+prints the number of runs and an estimate first (about 4 s a run), uploads
+each clip once and runs it under every setting, and writes a CSV row per run.
+A setting that is itself a list needs `;` between settings:
+`--lang "de;de,en;auto"`. The summary per setting has the word and character
+error rates (both texts lowercased, punctuation removed; CER is fairer to
+German compounds, since "Braut Kleid" for "Brautkleid" is two wrong words but
+one wrong character), the median and interquartile range of the total time,
+the encoding time per second of speech, the decoding time per token, and how
+often the detected language was the session's. `--summary results.csv`
+prints the summary of an earlier run again. Depths above 4 need the full
+model; the tool checks `model_layers` first.
+
+Both tools open the port with DTR and RTS low, as `tools/mon.py` does: on
+this board DTR holds BOOT down and RTS resets the chip. `--reset` restarts
+the firmware first.
 
 ## Performance
 
@@ -329,6 +407,7 @@ engine/              portable C99 engine, no dependencies
   nd_cact.c            .cact v3/v4 container reader
   nd_model.c, ...      Needle 2 (see below)
 esp32/whistle_demo/  push-to-talk speech -> LED firmware (ESP32-P4)
+esp32/whistle_stt/   push-to-talk speech -> text, and the benchmark (ESP32-P4)
 esp32/mic_test/      microphone and button check (ESP32-P4)
 esp32/components/board/  ESP32-P4-WIFI6 pins and its ES8311 microphone
 esp32/needle_demo/   the Needle 2 demo; also holds the engine's ESP-IDF component
