@@ -52,6 +52,9 @@
 #define FLOOR_HIST     250           /* 5 s of idle history */
 #define GATE_DB        12.0f         /* speech must clear the floor by this */
 #define KW_BONUS       3.0f          /* tuned on 360 clips: tools/eval_whistle.py */
+#define FLASH_MAP_END  0x1000000     /* the cache maps only the first 16 MB of
+                                      * quad flash (24-bit addresses), though
+                                      * the model partition runs to 32 MB */
 
 static const char *const COLORS[] = { "red", "green", "blue", "yellow", "purple", "white" };
 static const char *const LANGS[] = { "en", "de", "fr", "es", "it", "nl", "pl" };
@@ -427,10 +430,13 @@ static void whistle_task(void *arg)
     }
 }
 
-/* Copy the .cact at the start of the mapped partition into PSRAM. The blob
- * records no total size, so it ends where its last tensor does. Returns the
- * copy and its size, or NULL to keep using the mapping. */
-static void *model_to_psram(const void *blob, size_t avail, size_t *size)
+/* Copy the .cact at the start of the partition into PSRAM. The blob records
+ * no total size, so it ends where its last tensor does. The mapping only has
+ * to hold the header and directory: the copy goes through esp_partition_read,
+ * which reaches past FLASH_MAP_END. Returns the copy and its size, or NULL to
+ * keep using the mapping. */
+static void *model_to_psram(const esp_partition_t *part, const void *blob, size_t avail,
+                            size_t *size)
 {
     nd_cact   c;
     nd_tensor t;
@@ -444,14 +450,18 @@ static void *model_to_psram(const void *blob, size_t avail, size_t *size)
     for (i = 0; i < c.n; i++)
         if (nd_cact_tensor(&c, i, &t) == 0 && t.offset + t.nbytes > end)
             end = (size_t)(t.offset + t.nbytes);
-    if (end == 0 || end > avail)
+    if (end == 0 || end > part->size)
         return NULL;                        /* let nd_whistle_open report it */
     p = heap_caps_aligned_alloc(ND_CACT_ALIGN, end, MALLOC_CAP_SPIRAM);
     if (!p) {
         printf("EVT model_in_flash (no %u bytes of PSRAM free)\n", (unsigned)end);
         return NULL;
     }
-    memcpy(p, blob, end);
+    if (esp_partition_read(part, 0, p, end) != ESP_OK) {
+        printf("ERR model_read_failed bytes=%u\n", (unsigned)end);
+        heap_caps_free(p);
+        return NULL;
+    }
     printf("EVT model_in_psram bytes=%u ms=%.0f\n", (unsigned)end,
            (esp_timer_get_time() - t0) / 1000.0);
     *size = end;
@@ -485,12 +495,14 @@ void app_main(void)
         printf("ERR no_model_partition\n");
         return;
     }
-    if (esp_partition_mmap(part, 0, part->size, ESP_PARTITION_MMAP_DATA, &blob, &handle) != ESP_OK) {
-        printf("ERR mmap_failed size=%u\n", (unsigned)part->size);
+    size = part->size;
+    if (part->address + size > FLASH_MAP_END)
+        size = part->address < FLASH_MAP_END ? FLASH_MAP_END - part->address : 0;
+    if (esp_partition_mmap(part, 0, size, ESP_PARTITION_MMAP_DATA, &blob, &handle) != ESP_OK) {
+        printf("ERR mmap_failed size=%u\n", (unsigned)size);
         return;
     }
-    size = part->size;
-    copy = model_to_psram(blob, size, &size);
+    copy = model_to_psram(part, blob, size, &size);
     if (copy) {
         esp_partition_munmap(handle);
         blob = copy;
