@@ -1,0 +1,6 @@
+# Host tools (tools/, tests/). The firmware needs none of these; ESP-IDF brings
+# its own Python environment.
+numpy
+rich
+pyserial
+huggingface_hub
