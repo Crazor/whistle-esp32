@@ -185,16 +185,24 @@ English command, from release to result, as the firmware prints it
 | decoder | 1.47 s (11 tokens) | 2.2 s (9 tokens) |
 | **total** | **3.5 s** | **6.3 s** |
 
-A decoded token takes about 130 ms on the P4 and 240 ms on the S3. On the P4
-the total also includes 0.06 s to precompute the decoder's cross-attention
-keys and values (`cross_kv`). Copying the model into PSRAM at boot takes 1.3 s.
+On the P4 the total also includes 0.06 s to precompute the decoder's
+cross-attention keys and values (`cross_kv`). Copying the model into PSRAM at
+boot takes 1.3 s.
 
-The longer you speak, the longer it takes, because the encoder sees every
-80 ms frame: the encoder takes about 0.9 s per second of speech on the P4, and
-a 3-second English sentence takes 4.6 s. Other languages use more tokens: a
-3.2-second French sentence takes 12.6 s on the S3. A transcript that names no
-colour costs more, because the firmware decodes it again in the next detected
-languages: a 0.3-second word took 2.6 s on the P4.
+Across seven English and German commands of 1.2 to 3.0 seconds, the P4 took
+2.5 to 4.8 s from release to result:
+
+- **Encoding** (log-mel, conv stem and encoder) takes 0.9 s per second of
+  speech, because the encoder sees every 80 ms frame. The longer you speak,
+  the longer it takes.
+- **Decoding** takes 122 to 137 ms per token, against about 240 ms on the S3.
+  A command is 9 to 16 tokens.
+
+Other languages can use more tokens: a 3.2-second French sentence takes
+12.6 s on the S3. A transcript that names no colour costs more, because the
+firmware decodes it again in the next two detected languages. On the P4 that
+puts decoding at 300 to 760 ms per token: a 0.3-second word took 2.6 s, and a
+2.8-second English sentence with no colour took 8.4 s.
 
 The matmuls run in **int8 on the PIE vector unit**, 16 multiply-adds per
 instruction. PIE is Espressif's SIMD extension: 128-bit registers holding
