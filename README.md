@@ -55,10 +55,16 @@ contact.
 You need [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/)
 v5.5 or newer, Python 3 and CMake.
 
+On Debian or Ubuntu, including a fresh cloud container, `./setup-linux.sh`
+installs all of it: system packages, `.venv` from `requirements.txt`, and
+ESP-IDF v5.5.6 with the ESP32-P4 and ESP32-S3 toolchains (override with
+`IDF_VERSION` / `IDF_TARGETS`). It is idempotent, so it works as a
+session-start script, and puts `idf.py` on the PATH of later shells.
+
 ```bash
-# 1. host tools
+# 1. host tools (setup-linux.sh does this)
 python3 -m venv .venv
-.venv/bin/pip install numpy rich pyserial huggingface_hub
+.venv/bin/pip install -r requirements.txt
 
 # 2. fetch Whistle (16.9 MB) and cut it down to 4 decoder layers (14.5 MB)
 mkdir -p model/whistle && .venv/bin/python -c "
