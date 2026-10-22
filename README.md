@@ -56,18 +56,19 @@ listen to. Speech should sit well above the noise floor, with peaks well under
 You need [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/esp32p4/get-started/)
 v5.5 or newer, Python 3 and CMake.
 
-**Check the chip revision first.** The board has shipped with revision 1.x
-chips (v1.3), and IDF 5.5 builds for revision 3.x by default. The two are not
-binary compatible. `sdkconfig.defaults` selects 1.x:
+**Check the chip revision first.** The build targets revision 3.x, as current
+boards carry (v3.2 here). Earlier boards shipped with v1.x chips (v1.3), and
+the two are not binary compatible:
 
 ```bash
-esptool.py --chip esp32p4 -p /dev/ttyACM0 chip_id    # "Chip is ESP32-P4 (revision v1.3)"
+esptool.py --chip esp32p4 -p /dev/ttyACM0 chip_id    # "Chip is ESP32-P4 (revision v3.2)"
 ```
 
-On a v3.x chip, delete the two `CONFIG_ESP32P4_*REV*` lines and the
-`ESP_DEFAULT_CPU_FREQ_MHZ_360` line from `sdkconfig.defaults` in
-`esp32/whistle_demo` and `esp32/mic_test`. Then delete `sdkconfig` and `build`
-and rebuild.
+On a v1.x chip, add `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y` and
+`CONFIG_ESP32P4_REV_MIN_100=y` to `sdkconfig.defaults` in `esp32/whistle_demo`
+and `esp32/mic_test`. Also replace `ESP_DEFAULT_CPU_FREQ_MHZ_400` with
+`ESP_DEFAULT_CPU_FREQ_MHZ_360`, since 1.x tops out there. Then delete
+`sdkconfig` and `build` and rebuild.
 
 On Debian or Ubuntu, including a fresh cloud container, `./setup-linux.sh`
 installs all of it: system packages, `.venv` from `requirements.txt`, and
@@ -171,7 +172,7 @@ language, as in *toutes les deux secondes* or *alle zwei Sekunden*.
 ## Performance
 
 **Not yet measured on the P4.** The figures below are from the ESP32-S3 at
-240 MHz. The P4 runs at 360 MHz (revision 1.x) with the model in 200 MHz hex
+240 MHz. The P4 runs at 400 MHz (revision 3.x) with the model in 200 MHz hex
 PSRAM rather than QIO flash, so it should be considerably faster. The firmware
 prints the same per-phase timings (`EVT prof ...`).
 
