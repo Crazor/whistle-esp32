@@ -38,9 +38,11 @@ extern "C" {
 
 /* Per-phase microsecond counters, filled when ND_PROFILE is compiled in.
  * The first five are the pipeline's phases; the rest break them down and
- * overlap them (every phase does matmuls). */
+ * overlap them (every phase does matmuls), but not each other: LIN is every
+ * quantised matmul except the decoder's output layer (HEAD), and MHC is the
+ * lane mixing without its phi matmuls. */
 enum { ND_WP_MEL, ND_WP_STEM, ND_WP_ENCODER, ND_WP_CROSS_KV, ND_WP_DECODER,
-       ND_WP_LIN, ND_WP_MLP, ND_WP_ATTN, ND_WP_MHC, ND_WP_COUNT };
+       ND_WP_LIN, ND_WP_MLP, ND_WP_ATTN, ND_WP_MHC, ND_WP_HEAD, ND_WP_COUNT };
 #define ND_WP_PHASES 5
 extern uint64_t nd_wprof[ND_WP_COUNT];
 

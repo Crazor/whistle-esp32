@@ -317,7 +317,7 @@ int main(int argc, char **argv)
 #ifdef ND_PROFILE
     {
         static const char *PN[ND_WP_COUNT] = { "mel", "stem", "encoder", "cross_kv", "decoder",
-                                               "~matmul", "~mlp", "~attn", "~mhc" };
+                                               "~matmul", "~mlp", "~attn", "~mhc", "~head" };
         for (i = 0; i < ND_WP_COUNT; i++)
             fprintf(stderr, "prof  %-9s %8.1f ms\n", PN[i], nd_wprof[i] / 1000.0);
     }
