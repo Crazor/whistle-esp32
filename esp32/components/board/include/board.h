@@ -9,7 +9,8 @@
  * The header follows the Raspberry Pi Pico pinout and Waveshare documents it
  * only as a picture: check the silkscreen before wiring the LED, and change
  * LED_GPIO if 23 is not where you want it. Avoid GPIO7-13 (codec), 14-19 and
- * 54 (the ESP32-C6 link), 24-27 (USB), 35-38 (BOOT, console) and 39-45 (TF).
+ * 54 (the ESP32-C6 link: SDIO D0-D3, CLK, CMD, and the C6's reset; see
+ * esp32/wifi_test), 24-27 (USB), 35-38 (BOOT, console) and 39-45 (TF).
  */
 #ifndef BOARD_H
 #define BOARD_H

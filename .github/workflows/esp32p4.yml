@@ -28,7 +28,7 @@ jobs:
               - .github/workflows/esp32p4.yml
               - tools/check_sdkconfig.sh
               - esp32/components/**
-              # mic_test and whistle_stt use whistle_demo's partition table.
+              # The other apps use whistle_demo's partition table.
               - esp32/whistle_demo/partitions.csv
             whistle_demo:
               - *shared
@@ -43,12 +43,15 @@ jobs:
               - esp32/whistle_stt/**
               - esp32/needle_demo/components/**
               - engine/**
+            wifi_test:
+              - *shared
+              - esp32/wifi_test/**
       - id: pick
         env:
           CHANGES: ${{ steps.filter.outputs.changes }}
         run: |
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
-            apps='["whistle_demo","mic_test","whistle_stt"]'
+            apps='["whistle_demo","mic_test","whistle_stt","wifi_test"]'
           else
             apps="$(jq -c 'map(select(. != "shared"))' <<<"$CHANGES")"
           fi
