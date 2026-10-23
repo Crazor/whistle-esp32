@@ -3,6 +3,8 @@
  *   mic     the onboard microphone, through the ES8311 codec's ADC
  *           I2S  MCLK=GPIO13 BCLK=GPIO12 WS=GPIO10 DIN=GPIO11 (codec ASDOUT)
  *           I2C  SDA=GPIO7 SCL=GPIO8, ES8311 at 0x18
+ *   speaker the codec's DAC: I2S DOUT=GPIO9 (codec DSDIN), and the NS4150B
+ *           amplifier, enabled by GPIO53 (PA_CTRL, high = on)
  *   button  the BOOT key, GPIO35 (0 = pressed)
  *   LED     an external WS2812 on LED_GPIO; the board has none of its own
  *
@@ -20,6 +22,8 @@
 #define BOARD_I2S_BCLK_GPIO  12
 #define BOARD_I2S_WS_GPIO    10
 #define BOARD_I2S_DIN_GPIO   11
+#define BOARD_I2S_DOUT_GPIO  9
+#define BOARD_PA_GPIO        53
 #define BOARD_I2C_SDA_GPIO   7
 #define BOARD_I2C_SCL_GPIO   8
 #define BOARD_ES8311_ADDR    0x18

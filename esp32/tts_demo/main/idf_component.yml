@@ -1,0 +1,4 @@
+dependencies:
+  idf: ">=5.5"
+  # ES8311 codec and PA control, as Espressif's ESP32-P4 board support uses.
+  espressif/esp_codec_dev: "~1.5"

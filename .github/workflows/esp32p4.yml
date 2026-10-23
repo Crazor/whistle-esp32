@@ -43,12 +43,18 @@ jobs:
               - esp32/whistle_stt/**
               - esp32/needle_demo/components/**
               - engine/**
+            tts_demo:
+              - *shared
+              - esp32/tts_demo/**
+              - tts/**
+              - third_party/picotts/**
+              - tools/pico_lang.py
       - id: pick
         env:
           CHANGES: ${{ steps.filter.outputs.changes }}
         run: |
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
-            apps='["whistle_demo","mic_test","whistle_stt"]'
+            apps='["whistle_demo","mic_test","whistle_stt","tts_demo"]'
           else
             apps="$(jq -c 'map(select(. != "shared"))' <<<"$CHANGES")"
           fi
@@ -68,7 +74,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The model is flashed to its own partition and is not needed to build.
+      # The Whistle model is flashed to its own partition and is not needed to
+      # build. tts_demo's lingware is small and goes into a FAT image at build
+      # time, so fetch it to build and check that image as well.
+      - name: Fetch Pico lingware
+        if: matrix.app == 'tts_demo'
+        run: python3 tools/pico_lang.py
+
       - name: Build
         shell: bash
         working-directory: esp32/${{ matrix.app }}

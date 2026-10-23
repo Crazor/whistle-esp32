@@ -309,6 +309,76 @@ On general speech, depth 4 scores 11.7% word error rate on 73 LibriSpeech
 utterances (depth 2: 15.3%). `tools/eval_whistle.py` and
 `tools/eval_languages.py` reproduce these numbers given test clips.
 
+## Text to speech (ESP32-P4)
+
+`esp32/tts_demo` gives the board a voice. Type a line on the console and the
+board speaks it through the ESP32-P4-WIFI6's onboard ES8311 codec and its
+NS4150B amplifier, to a speaker on the amplifier's output. The engine is
+[SVOX Pico](third_party/picotts/README.md), the TTS that shipped with Android,
+Apache 2.0 like the rest of this repository. It runs entirely on the chip.
+
+Pico speaks five of Whistle's seven languages: English (US, plus a British
+voice), German, French, Spanish and Italian. It has no Dutch or Polish voice.
+Each language takes 0.9-1.5 MB of lingware, which is copied into a 3 MB PSRAM
+area when the voice opens.
+
+```bash
+# 1. lingware for en de fr es it (5.3 MB, hash-checked) -> model/pico/
+.venv/bin/python tools/pico_lang.py          # add en-GB for the British voice
+
+# 2. firmware, plus the lingware as a FAT image in the "lang" partition
+. $HOME/esp/esp-idf/export.sh
+cd esp32/tts_demo
+idf.py set-target esp32p4 && idf.py build
+idf.py -p /dev/ttyACM0 flash lang-flash monitor   # lang-flash only the first time
+```
+
+The pins are in `esp32/components/board/include/board.h`. Espressif's
+ESP32-P4-Function-EV-Board uses the same ones. As with the other apps, the
+defaults build for chip revision v3.x.
+
+On the console:
+
+| Type | Does |
+|---|---|
+| `Flashing the light blue.` | says it in the current voice |
+| `:de` | switches to German (`en de fr es it en-GB`) |
+| `:vol 50` | speaker volume, 0-100 (default 100) |
+| `:comp 0` | compressor off (`:comp 1` on, the default) |
+| `Das ist <speed level="70">langsamer</speed>.` | Pico markup: `speed`, `pitch`, `volume`, 100 = normal |
+| `:tone`, `:rawtone`, `:pa 0`/`:pa 1`, `:regs` | audio checks: a 440 Hz beep through the codec driver or straight to I2S, the amplifier enable by hand, the ES8311's registers |
+
+Each spoken line prints `EVT tts lang=.. speech_ms=.. synth_ms=.. rtf=..
+peak=.. write_err=..`. `rtf` is synthesis time over speech time, and it must
+stay below 1 for playback without gaps. The first 200 ms are buffered before
+playback starts. On the P4, Pico runs at `rtf` 0.12-0.14, seven to eight times
+faster than real time (on a desktop CPU, about 200 times).
+
+The board's amplifier is small. A compressor (`tts/src/nd_comp.c`) makes
+speech about 4 dB louder at the same peak level. Stronger settings were
+louder, but `tools/check_tts.py --comp -4.5` showed Whistle then misheard
+more words.
+
+**Flash.** The lingware partition is the last 7 MB of the 32 MB flash, past
+the end of the Whistle model in `whistle_demo`'s and `whistle_stt`'s
+partition. Flashing one app leaves the other's data in place, so switching
+between them is only `idf.py flash` in the other app's directory. Use the full
+`idf.py flash`, not `app-flash`: the apps have different partition tables, and
+`tts_demo` needs its own to find `lang`. The apps are separate for now. To
+combine them, shrink the model partition to end at 0x1900000 and add the
+`lang` partition to the table.
+
+On the host, `tts_run` writes a WAV and `tools/check_tts.py` plays it back
+through Whistle as a listening test that needs no ears. Pico says each demo
+command and Whistle transcribes it back. All ten commands come back with the
+right colour. Word error rate is 0-18% per language, and most of the errors
+are homophones such as "Mets" and "Mais":
+
+```bash
+./build/tts_run model/pico de "Das Licht blinkt grün." out.wav
+.venv/bin/python tools/check_tts.py model/whistle/whistle_d4.cact
+```
+
 ## Troubleshooting
 
 Most of these fail **silently**. The board keeps running and the model keeps
@@ -325,6 +395,13 @@ other terminals the same way.
 
 **The bootloader refuses the image, or the app crashes at once.** The build
 was made for the wrong chip revision. See Setup.
+
+**"Illegal instruction" right after `boot: Loaded app`.** The bootloader on
+the board comes from an app with a different L2 cache size. Internal RAM
+starts after the cache, so the app loads its code into what the bootloader
+uses as cache. All the apps here use 256 KB. After `app-flash` or a flash of
+only the app binary, the bootloader and partition table stay from whatever
+was flashed before; a full `idf.py flash` replaces all three.
 
 **ESP_ERROR_CHECK failed in `board.c` at boot.** The ES8311 did not answer
 on I²C. The codec gets its clock from MCLK, so it is configured after the I²S
@@ -409,9 +486,13 @@ engine/              portable C99 engine, no dependencies
 esp32/whistle_demo/  push-to-talk speech -> LED firmware (ESP32-P4)
 esp32/whistle_stt/   push-to-talk speech -> text, and the benchmark (ESP32-P4)
 esp32/mic_test/      microphone and button check (ESP32-P4)
-esp32/components/board/  ESP32-P4-WIFI6 pins and its ES8311 microphone
+esp32/tts_demo/      Pico text to speech on the board's ES8311 codec (ESP32-P4);
+                     also holds the picotts ESP-IDF component
+esp32/components/board/  ESP32-P4-WIFI6 pins, its ES8311 microphone and speaker
+tts/                 nd_tts: a small wrapper over Pico's API
+third_party/picotts/ SVOX Pico engine (Apache 2.0, Debian-patched)
 esp32/needle_demo/   the Needle 2 demo; also holds the engine's ESP-IDF component
-host/                wh_run and other host tools
+host/                wh_run, tts_run and other host tools
 tools/               console UI, model tools, references, evaluation
 docs/                wiring diagram (tools/wiring_diagram.py draws it)
 ```
@@ -430,3 +511,7 @@ Whistle, Needle 2 and their weights are by
 [Cactus Compute](https://github.com/cactus-compute/needle), Apache 2.0. The
 weights are not included here: step 2 of the setup downloads them from
 Hugging Face. This code is Apache 2.0 too.
+
+SVOX Pico is by SVOX AG, Apache 2.0, from the Android Open Source Project,
+with Debian's fixes (`third_party/picotts`). `tools/pico_lang.py` fetches its
+lingware from AOSP.

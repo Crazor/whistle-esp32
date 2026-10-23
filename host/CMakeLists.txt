@@ -29,3 +29,21 @@ target_link_libraries(wh_run PRIVATE needle_engine)
 
 add_executable(ledcmd_test ledcmd_test.c)
 target_link_libraries(ledcmd_test PRIVATE needle_engine)
+
+# Text to speech: SVOX Pico (third_party/picotts) and its wrapper (tts/).
+# Pico is 2009 code; its own warnings are not ours to fix.
+set(PICO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/picotts)
+set(TTS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../tts)
+file(GLOB PICO_SRC ${PICO_DIR}/*.c)
+
+add_library(picotts STATIC ${PICO_SRC})
+target_include_directories(picotts PUBLIC ${PICO_DIR})
+target_compile_options(picotts PRIVATE -w)
+target_link_libraries(picotts PUBLIC m)
+
+add_library(nd_tts STATIC ${TTS_DIR}/src/nd_tts.c ${TTS_DIR}/src/nd_comp.c)
+target_include_directories(nd_tts PUBLIC ${TTS_DIR}/include)
+target_link_libraries(nd_tts PUBLIC picotts)
+
+add_executable(tts_run tts_run.c)
+target_link_libraries(tts_run PRIVATE nd_tts)

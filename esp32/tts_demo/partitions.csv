@@ -1,0 +1,11 @@
+# name,     type, subtype,  offset,    size
+# The app sits where whistle_demo's does. The lingware goes in the last 7 MB of
+# the 32 MB flash (all six Pico voices take 6.4 MB with FAT, the five default
+# ones 5.3 MB), past the end of the Whistle model in whistle_demo's "model"
+# partition (16.9 MB from 0x210000, to 0x1290000 at most). So flashing this
+# demo and its lingware leaves the model in place for whistle_demo, and the
+# other way round.
+nvs,        data, nvs,      0x9000,    0x6000
+phy_init,   data, phy,      0xf000,    0x1000
+factory,    app,  factory,  0x10000,   0x200000
+lang,       data, fat,      0x1900000, 0x700000
