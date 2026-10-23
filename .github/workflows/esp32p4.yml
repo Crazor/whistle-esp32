@@ -99,3 +99,49 @@ jobs:
             esp32/${{ matrix.app }}/build/flasher_args.json
             esp32/${{ matrix.app }}/sdkconfig
           if-no-files-found: error
+
+  # Post a fresh comment with download links for every PR build, so each push
+  # gets its own record instead of overwriting the previous one.
+  comment:
+    needs: build
+    if: >-
+      always() && github.event_name == 'pull_request' &&
+      needs.build.result != 'skipped' && needs.build.result != 'cancelled'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      pull-requests: write
+    # Fork PRs get a read-only token and cannot comment.
+    continue-on-error: true
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const runId = context.runId;
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${runId}`;
+            const artifacts = await github.paginate(
+              github.rest.actions.listWorkflowRunArtifacts,
+              { owner, repo, run_id: runId, per_page: 100 });
+            const sha = process.env.HEAD_SHA;
+            const lines = [
+              `### ESP32-P4 firmware build for ${sha.slice(0, 7)}`,
+              '',
+              `Result: **${process.env.BUILD_RESULT}** ([workflow run](${runUrl}))`,
+              '',
+            ];
+            if (artifacts.length) {
+              lines.push('| Artifact | Size |', '| --- | --- |');
+              for (const a of artifacts.sort((x, y) => x.name.localeCompare(y.name))) {
+                const mib = (a.size_in_bytes / 1048576).toFixed(1);
+                lines.push(`| [${a.name}](${runUrl}/artifacts/${a.id}) | ${mib} MiB |`);
+              }
+            } else {
+              lines.push('No artifacts were uploaded.');
+            }
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: context.issue.number, body: lines.join('\n'),
+            });
