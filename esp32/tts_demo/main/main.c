@@ -14,6 +14,10 @@
  * In, one line each:
  *   :de          switch voice (en de fr es it, or en-GB); 0.1-0.3 s
  *   :vol 70      speaker volume, 0-100
+ *   :tone [hz]   one second of a sine (default 440 Hz), through the codec
+ *                driver; :rawtone writes it to I2S directly instead
+ *   :pa 0|1      speaker amplifier off/on by hand (GPIO53)
+ *   :regs        dump the ES8311's registers
  *   anything     spoken in the current voice. Pico markup works inline:
  *                <speed level="80">slower</speed>, <pitch level="120">
  *
@@ -21,10 +25,12 @@
  *   EVT ...      status, and for each line spoken its length and how long
  *                synthesis took
  */
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "driver/i2s_std.h"
 #include "esp_codec_dev.h"
@@ -54,6 +60,8 @@
 #define VOLUME         70
 
 static esp_codec_dev_handle_t s_spk;
+static const audio_codec_if_t *s_codec_if;   /* for :regs */
+static i2s_chan_handle_t      s_tx;          /* for :rawtone */
 static nd_tts                 s_tts;
 static void                  *s_mem;
 
@@ -132,6 +140,13 @@ static esp_codec_dev_handle_t speaker_init(void)
         return NULL;
     }
     esp_codec_dev_set_out_vol(dev, VOLUME);
+    /* Readable as well as driven, so :pa and the boot line can report it. */
+    gpio_set_direction(BOARD_PA_GPIO, GPIO_MODE_INPUT_OUTPUT);
+    gpio_set_level(BOARD_PA_GPIO, 1);
+    s_codec_if = codec_if;
+    s_tx = tx;
+    printf("EVT codec open rate=%d vol=%d pa_gpio=%d pa_level=%d\n", ND_TTS_RATE, VOLUME,
+           BOARD_PA_GPIO, gpio_get_level(BOARD_PA_GPIO));
     return dev;
 }
 
@@ -142,12 +157,22 @@ typedef struct {
     size_t   npre;
     int      started;
     int64_t  write_us;      /* time spent waiting on the codec, not Pico */
+    int      peak;          /* largest |sample|, to tell silence from sound */
+    int      write_err;     /* last failed codec write, 0 if none */
 } player;
 
 static void out(player *p, const int16_t *pcm, size_t n)
 {
     int64_t t = esp_timer_get_time();
-    esp_codec_dev_write(s_spk, (void *)pcm, (int)(n * sizeof(*pcm)));
+    int     err = esp_codec_dev_write(s_spk, (void *)pcm, (int)(n * sizeof(*pcm)));
+    size_t  i;
+    if (err != ESP_CODEC_DEV_OK)
+        p->write_err = err;
+    for (i = 0; i < n; i++) {
+        int a = pcm[i] < 0 ? -pcm[i] : pcm[i];
+        if (a > p->peak)
+            p->peak = a;
+    }
     p->write_us += esp_timer_get_time() - t;
 }
 
@@ -181,6 +206,8 @@ static void say(const char *text)
     p.npre = 0;
     p.started = 0;
     p.write_us = 0;
+    p.peak = 0;
+    p.write_err = 0;
     n = nd_tts_speak(&s_tts, text, play, &p);
     if (!p.started && p.npre)
         out(&p, p.pre, p.npre);             /* shorter than the prebuffer */
@@ -191,8 +218,32 @@ static void say(const char *text)
     /* Pico's own time: the whole call less the waits on the codec. */
     double synth_ms = (esp_timer_get_time() - t0 - p.write_us) / 1000.0;
     double speech_ms = n * 1000.0 / ND_TTS_RATE;
-    printf("EVT tts lang=%s speech_ms=%.0f synth_ms=%.0f rtf=%.2f\n", s_tts.lang, speech_ms,
-           synth_ms, speech_ms > 0 ? synth_ms / speech_ms : 0.0);
+    printf("EVT tts lang=%s speech_ms=%.0f synth_ms=%.0f rtf=%.2f peak=%d write_err=%d\n",
+           s_tts.lang, speech_ms, synth_ms, speech_ms > 0 ? synth_ms / speech_ms : 0.0, p.peak,
+           p.write_err);
+}
+
+/* One second of a sine at half scale, through esp_codec_dev or, with `raw`,
+ * straight into the I2S channel, to find where sound stops. */
+static void tone(int hz, int raw)
+{
+    static int16_t buf[ND_TTS_RATE / 10];
+    player         p = { 0 };
+    int            i, k, err = 0;
+    size_t         done;
+
+    if (hz <= 0)
+        hz = 440;
+    for (k = 0; k < 10; k++) {
+        for (i = 0; i < ND_TTS_RATE / 10; i++)
+            buf[i] = (int16_t)(16000.0f * sinf(6.2831853f * hz * (k * (ND_TTS_RATE / 10) + i) / ND_TTS_RATE));
+        if (raw)
+            err = i2s_channel_write(s_tx, buf, sizeof(buf), &done, 1000) != ESP_OK ? -1 : err;
+        else
+            out(&p, buf, ND_TTS_RATE / 10);
+    }
+    printf("EVT tone hz=%d via=%s err=%d pa_level=%d\n", hz, raw ? "i2s" : "codec",
+           raw ? err : p.write_err, gpio_get_level(BOARD_PA_GPIO));
 }
 
 static int open_voice(const char *lang)
@@ -275,6 +326,16 @@ void app_main(void)
             int v = atoi(line + 5);
             esp_codec_dev_set_out_vol(s_spk, v < 0 ? 0 : v > 100 ? 100 : v);
             printf("EVT volume %d\n", v);
+        } else if (!strncmp(line, ":tone", 5)) {
+            tone(atoi(line + 5), 0);
+        } else if (!strncmp(line, ":rawtone", 8)) {
+            tone(atoi(line + 8), 1);
+        } else if (!strncmp(line, ":pa ", 4)) {
+            gpio_set_level(BOARD_PA_GPIO, atoi(line + 4) ? 1 : 0);
+            printf("EVT pa level=%d\n", gpio_get_level(BOARD_PA_GPIO));
+        } else if (!strcmp(line, ":regs")) {
+            if (s_codec_if && s_codec_if->dump_reg)
+                s_codec_if->dump_reg(s_codec_if);
         } else if (line[0] == ':') {
             open_voice(line + 1);
         } else if (s_tts.engine) {
