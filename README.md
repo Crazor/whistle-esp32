@@ -249,24 +249,38 @@ the firmware first.
 
 ## Performance
 
-**Not yet measured on the P4.** The figures below are from the ESP32-S3 at
-240 MHz. The P4 runs at 400 MHz (revision 3.x) with the model in 200 MHz hex
-PSRAM rather than QIO flash, so it should be considerably faster. The firmware
-prints the same per-phase timings (`EVT prof ...`).
+The P4 transcribes a 2-second command in about 3.5 s, 1.8 times as fast as
+the S3. It runs at 400 MHz (revision 3.x) with the model in 200 MHz hex PSRAM;
+the S3 runs at 240 MHz with the model in QIO flash. Depth 4, for a 2-second
+English command, from release to result, as the firmware prints it
+(`EVT prof ...`):
 
-On the S3, depth 4, for a 2-second English command:
+| Phase | P4 | S3 |
+|---|---|---|
+| log-mel spectrogram | 0.06 s | 0.1 s |
+| conv stem | 0.34 s | 0.9 s |
+| encoder (8 layers) | 1.57 s | 3.2 s |
+| decoder | 1.47 s (11 tokens) | 2.2 s (9 tokens) |
+| **total** | **3.5 s** | **6.3 s** |
 
-| Phase | Time |
-|---|---|
-| log-mel spectrogram | 0.1 s |
-| conv stem | 0.9 s |
-| encoder (8 layers) | 3.2 s |
-| decoder (9 tokens) | 2.2 s |
-| **total** | **6.3 s** |
+On the P4 the total also includes 0.06 s to precompute the decoder's
+cross-attention keys and values (`cross_kv`). Copying the model into PSRAM at
+boot takes 1.3 s.
 
-The longer you speak, the longer it takes, because the encoder sees every
-80 ms frame. Other languages use more tokens: a 3.2-second French sentence
-takes 12.6 s.
+Across seven English and German commands of 1.2 to 3.0 seconds, the P4 took
+2.5 to 4.8 s from release to result:
+
+- **Encoding** (log-mel, conv stem and encoder) takes 0.9 s per second of
+  speech, because the encoder sees every 80 ms frame. The longer you speak,
+  the longer it takes.
+- **Decoding** takes 122 to 137 ms per token, against about 240 ms on the S3.
+  A command is 9 to 16 tokens.
+
+Other languages can use more tokens: a 3.2-second French sentence takes
+12.6 s on the S3. A transcript that names no colour costs more, because the
+firmware decodes it again in the next two detected languages. On the P4 that
+puts decoding at 300 to 760 ms per token: a 0.3-second word took 2.6 s, and a
+2.8-second English sentence with no colour took 8.4 s.
 
 The matmuls run in **int8 on the PIE vector unit**, 16 multiply-adds per
 instruction. PIE is Espressif's SIMD extension: 128-bit registers holding
