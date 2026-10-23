@@ -1,0 +1,35 @@
+# Waveshare ESP32-P4-WIFI6: ESP32-P4NRW32 (32 MB PSRAM in the package), 32 MB
+# QSPI flash, console on UART0 through the board's CH343P USB bridge.
+CONFIG_IDF_TARGET="esp32p4"
+# Built for chip revision 3.x (IDF's default; this board has a v3.2). Older
+# boards carry a v1.x chip, which needs a separate build. Check yours with
+#   esptool.py --chip esp32p4 -p PORT chip_id
+# and on v1.x add CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y and
+# CONFIG_ESP32P4_REV_MIN_100=y here, then delete `sdkconfig` and `build`.
+CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+# whistle_demo's table: the model partition runs to the end of the 32 MB
+# flash, at the same address, so a model flashed for one app serves both.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../whistle_demo/partitions.csv"
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_FREERTOS_HZ=1000
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+# The documented maximum for revision 3.x (IDF caps 1.x at 360 MHz).
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_400=y
+CONFIG_ESP_TASK_WDT_EN=n
+# Every token streams ~9 MB of weights through the cache. The L2 cache comes
+# out of the 768 KB of internal memory; 256 KB with 128-byte lines leaves
+# plenty for the engine's internal buffers.
+CONFIG_CACHE_L2_CACHE_256KB=y
+CONFIG_CACHE_L2_CACHE_LINE_128B=y
+# UART0 through the USB bridge. At the 115200 default every printf busy-waits
+# on the FIFO; the host tools here open the port at this rate.
+CONFIG_ESP_CONSOLE_UART_CUSTOM=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=921600
