@@ -1,7 +1,11 @@
 # Board settings as whistle_demo's (Waveshare ESP32-P4-WIFI6: 32 MB PSRAM in
 # the package, 32 MB QSPI flash, console on UART0 through the CH343P bridge).
 CONFIG_IDF_TARGET="esp32p4"
-# Built for chip revision 3.x; for a v1.x chip see whistle_demo's defaults.
+# Built for chip revision 3.x (the board has a v3.2), pinned rather than left
+# to ESP-IDF's default, which some releases set to v0.x/v1.x. For a v1.x
+# chip see whistle_demo's defaults.
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=n
+CONFIG_ESP32P4_REV_MIN_300=y
 CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
