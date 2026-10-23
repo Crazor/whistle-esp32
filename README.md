@@ -22,8 +22,8 @@ dependencies, checked tensor by tensor against the official engine.
 The microphone (an onboard mic behind the ES8311 codec) and the push-to-talk
 button (**BOOT**) are already on the board.
 
-This port started from an ESP32-S3 build; `whistle_demo`, `whistle_stt` and
-`mic_test` target the P4. `needle_demo`, `led_probe` and `psram_test` are still the S3
+This port started from an ESP32-S3 build; `whistle_demo`, `whistle_stt`,
+`mic_test` and `wifi_test` target the P4. `needle_demo`, `led_probe` and `psram_test` are still the S3
 versions.
 
 ## Wiring
@@ -247,6 +247,53 @@ Both tools open the port with DTR and RTS low, as `tools/mon.py` does: on
 this board DTR holds BOOT down and RTS resets the chip. `--reset` restarts
 the firmware first.
 
+## Wi-Fi: wifi_test
+
+The P4 has no radio of its own. The board's Wi-Fi 6 comes from an ESP32-C6
+next to it, wired to the P4 over 4-bit SDIO (CLK GPIO18, CMD GPIO19, D0-D3
+GPIO14-17) with its reset on GPIO54. The C6 runs Espressif's
+[ESP-Hosted](https://github.com/espressif/esp-hosted-mcu) co-processor
+firmware, and on the P4 the `esp_hosted` and `esp_wifi_remote` components
+forward the ordinary `esp_wifi_*` API to it. They are the repo's only managed
+components, fetched by `idf.py` on the first build and pinned in
+`esp32/wifi_test/dependencies.lock`.
+
+`esp32/wifi_test` checks that chain one link at a time. Build and flash it as
+in step 3 of the setup, in `esp32/wifi_test` (same partition table, so the
+model stays in flash). At boot it prints:
+
+```
+EVT wifi_init ms=..                          the SDIO link is up
+CP fw=<x.y.z> target=esp32c6 chip_id=..      the C6 answered, with its firmware
+AP ssid="..." rssi=-52 ch=6 auth=wpa2 ...    its radio hears access points
+EVT scan_done n=..
+```
+
+Then give it a network, which it keeps in NVS and joins at every boot:
+
+```bash
+.venv/bin/python tools/mon.py /dev/ttyACM0 30 --send 'join ssid="My Net" pass=secret'
+```
+
+```
+EVT connected ssid="My Net" ch=6 auth=wpa2
+EVT got_ip ip=192.168.1.42 mask=255.255.255.0 gw=192.168.1.1
+NET dns host=example.com ok=1 ip=... ms=..
+NET http ok=1 ms=.. status="HTTP/1.1 200 OK"
+```
+
+The last two lines prove that data crosses the link both ways. Other commands:
+`scan`, `status`, `net` (repeat the DNS and HTTP check) and `forget` (leave
+and erase the stored network). A dropped connection is retried with backoff
+up to 30 s; `EVT disconnected reason=<n>` carries IDF's
+`wifi_err_reason_t` (201: no AP with that name, 15 or 204: wrong password).
+
+**`ERR wifi_init` or no `CP` line.** The C6 did not answer over SDIO. The
+host's `esp_hosted` 3.x works with C6 firmware 0.0.6 and newer. The board is
+meant to ship with an ESP-Hosted image on the C6; if it has been reflashed, or
+the image is too old, it needs the ESP-Hosted co-processor firmware (ESP-Hosted's
+`examples/ota` updates it from the P4).
+
 ## Performance
 
 **Not yet measured on the P4.** The figures below are from the ESP32-S3 at
@@ -409,6 +456,7 @@ engine/              portable C99 engine, no dependencies
 esp32/whistle_demo/  push-to-talk speech -> LED firmware (ESP32-P4)
 esp32/whistle_stt/   push-to-talk speech -> text, and the benchmark (ESP32-P4)
 esp32/mic_test/      microphone and button check (ESP32-P4)
+esp32/wifi_test/     Wi-Fi bring-up through the onboard ESP32-C6 (ESP32-P4)
 esp32/components/board/  ESP32-P4-WIFI6 pins and its ES8311 microphone
 esp32/needle_demo/   the Needle 2 demo; also holds the engine's ESP-IDF component
 host/                wh_run and other host tools
