@@ -1,0 +1,30 @@
+# Board settings as whistle_demo's (Waveshare ESP32-P4-WIFI6: 32 MB PSRAM in
+# the package, 32 MB QSPI flash, console on UART0 through the CH343P bridge).
+CONFIG_IDF_TARGET="esp32p4"
+# Built for chip revision 3.x; for a v1.x chip see whistle_demo's defaults.
+CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+# Pico's deepest call chain is a few KB; this leaves plenty.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+CONFIG_FREERTOS_HZ=1000
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_400=y
+CONFIG_ESP_TASK_WDT_EN=n
+# The same L2 cache as whistle_demo, which also puts internal RAM at the same
+# address (it starts after the cache). An app linked for a different cache
+# size than the bootloader on the board loads its code into memory the
+# bootloader uses as cache, and crashes at once with an illegal instruction.
+CONFIG_CACHE_L2_CACHE_256KB=y
+CONFIG_CACHE_L2_CACHE_LINE_128B=y
+CONFIG_ESP_CONSOLE_UART_CUSTOM=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=921600
+# The lingware file names are longer than 8.3.
+CONFIG_FATFS_LFN_HEAP=y
