@@ -4,7 +4,7 @@
 set(REPO "${CMAKE_CURRENT_LIST_DIR}/../../../..")
 file(GLOB PICO_SRC "${REPO}/third_party/picotts/*.c")
 
-idf_component_register(SRCS ${PICO_SRC} "${REPO}/tts/src/nd_tts.c"
+idf_component_register(SRCS ${PICO_SRC} "${REPO}/tts/src/nd_tts.c" "${REPO}/tts/src/nd_comp.c"
                        INCLUDE_DIRS "${REPO}/tts/include"
                        PRIV_INCLUDE_DIRS "${REPO}/third_party/picotts")
 

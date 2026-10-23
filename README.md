@@ -343,14 +343,21 @@ On the console:
 |---|---|
 | `Flashing the light blue.` | says it in the current voice |
 | `:de` | switches to German (`en de fr es it en-GB`) |
-| `:vol 50` | speaker volume, 0-100 |
+| `:vol 50` | speaker volume, 0-100 (default 100) |
+| `:comp 0` | compressor off (`:comp 1` on, the default) |
 | `Das ist <speed level="70">langsamer</speed>.` | Pico markup: `speed`, `pitch`, `volume`, 100 = normal |
+| `:tone`, `:rawtone`, `:pa 0`/`:pa 1`, `:regs` | audio checks: a 440 Hz beep through the codec driver or straight to I2S, the amplifier enable by hand, the ES8311's registers |
 
-Each spoken line prints `EVT tts lang=.. speech_ms=.. synth_ms=.. rtf=..`.
-`rtf` is synthesis time over speech time, and it must stay below 1 for
-playback without gaps. The first 200 ms are buffered before playback starts.
-On a desktop CPU Pico runs about 200 times faster than real time. Its speed on
-the P4 has not been measured yet; `rtf` will show it.
+Each spoken line prints `EVT tts lang=.. speech_ms=.. synth_ms=.. rtf=..
+peak=.. write_err=..`. `rtf` is synthesis time over speech time, and it must
+stay below 1 for playback without gaps. The first 200 ms are buffered before
+playback starts. On the P4, Pico runs at `rtf` 0.12-0.14, seven to eight times
+faster than real time (on a desktop CPU, about 200 times).
+
+The board's amplifier is small. A compressor (`tts/src/nd_comp.c`) makes
+speech about 4 dB louder at the same peak level. Stronger settings were
+louder, but `tools/check_tts.py --comp -4.5` showed Whistle then misheard
+more words.
 
 **Flash.** The lingware partition is the last 7 MB of the 32 MB flash, past
 the end of the Whistle model in `whistle_demo`'s and `whistle_stt`'s

@@ -3,12 +3,14 @@
 
   python3 tools/check_tts.py model/whistle/whistle_d4.cact
       [--tts ./build/tts_run --asr ./build/wh_run --lang-dir model/pico]
+      [--comp -4.5]
 
 A listening test that needs no ears: if Whistle hears the colour Pico meant,
 in the language Pico spoke, the voice is intelligible. Prints each transcript,
 the detected language and the LED action, and per language the word error
 rate, how many commands came back with the right colour (the exit status) and
-how often Whistle detected the language Pico spoke.
+how often Whistle detected the language Pico spoke. --comp runs Pico's
+output through the compressor tts_demo uses, with that ceiling in dBFS.
 """
 import argparse
 import os
@@ -47,6 +49,7 @@ def main():
     ap.add_argument("--tts", default="./build/tts_run")
     ap.add_argument("--asr", default="./build/wh_run")
     ap.add_argument("--lang-dir", default="model/pico")
+    ap.add_argument("--comp", help="compressor ceiling in dBFS, as tts_demo")
     args = ap.parse_args()
 
     failed = 0
@@ -55,7 +58,8 @@ def main():
             words = errs = right = same = 0
             for i, (text, colour) in enumerate(phrases):
                 wav = os.path.join(tmp, "%s%d.wav" % (lang, i))
-                r = subprocess.run([args.tts, args.lang_dir, lang, text, wav], capture_output=True, text=True)
+                cmd = [args.tts, args.lang_dir, lang, text, wav] + (["--comp", args.comp] if args.comp else [])
+                r = subprocess.run(cmd, capture_output=True, text=True)
                 if r.returncode:
                     sys.exit("tts_run: " + r.stderr.strip())
                 r = subprocess.run([args.asr, args.blob, wav, "--lang", "auto", "--led-keywords"],

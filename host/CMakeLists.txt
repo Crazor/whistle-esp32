@@ -41,7 +41,7 @@ target_include_directories(picotts PUBLIC ${PICO_DIR})
 target_compile_options(picotts PRIVATE -w)
 target_link_libraries(picotts PUBLIC m)
 
-add_library(nd_tts STATIC ${TTS_DIR}/src/nd_tts.c)
+add_library(nd_tts STATIC ${TTS_DIR}/src/nd_tts.c ${TTS_DIR}/src/nd_comp.c)
 target_include_directories(nd_tts PUBLIC ${TTS_DIR}/include)
 target_link_libraries(nd_tts PUBLIC picotts)
 

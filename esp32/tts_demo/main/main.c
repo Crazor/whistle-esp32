@@ -13,7 +13,8 @@
  *
  * In, one line each:
  *   :de          switch voice (en de fr es it, or en-GB); 0.1-0.3 s
- *   :vol 70      speaker volume, 0-100
+ *   :vol 100     speaker volume, 0-100
+ *   :comp 0|1    compressor off/on (nd_comp.h; on by default)
  *   :tone [hz]   one second of a sine (default 440 Hz), through the codec
  *                driver; :rawtone writes it to I2S directly instead
  *   :pa 0|1      speaker amplifier off/on by hand (GPIO53)
@@ -51,19 +52,24 @@
 #endif
 
 #include "board.h"
+#include "nd_comp.h"
 #include "nd_tts.h"
 
 #define LANG_MOUNT     "/lang"
 #define PREBUF         (ND_TTS_RATE / 5)  /* 200 ms queued before the first
                                            * write, so a slow start of
                                            * synthesis does not stutter */
-#define VOLUME         70
+#define VOLUME         100
+/* esp_codec_dev turns volume 100 into +3.5 dB of DAC gain (register 0x32 =
+ * 0xC6), so the compressor's peaks stop that much under full scale. */
+#define COMP_CEILING_DB -4.5f
 
 static esp_codec_dev_handle_t s_spk;
 static const audio_codec_if_t *s_codec_if;   /* for :regs */
 static i2s_chan_handle_t      s_tx;          /* for :rawtone */
 static nd_tts                 s_tts;
 static void                  *s_mem;
+static int                    s_comp = 1;
 
 /* ------------------------------------------------------------------ codec */
 
@@ -168,6 +174,7 @@ typedef struct {
     int64_t  write_us;      /* time spent waiting on the codec, not Pico */
     int      peak;          /* largest |sample|, to tell silence from sound */
     int      write_err;     /* last failed codec write, 0 if none */
+    nd_comp  comp;
 } player;
 
 static void out(player *p, const int16_t *pcm, size_t n)
@@ -187,9 +194,18 @@ static void out(player *p, const int16_t *pcm, size_t n)
 
 /* nd_tts sink: queue the first PREBUF samples, then stream. The codec write
  * blocks while the DMA buffers are full, which paces Pico to the speaker. */
-static int play(const int16_t *pcm, size_t n, void *ctx)
+static int play(const int16_t *in, size_t n, void *ctx)
 {
-    player *p = (player *)ctx;
+    player         *p = (player *)ctx;
+    int16_t         buf[256];
+    const int16_t  *pcm = in;
+
+    /* Pico hands over at most 128 samples at a time; compress a copy. */
+    if (s_comp && n <= sizeof(buf) / sizeof(buf[0])) {
+        memcpy(buf, in, n * sizeof(*in));
+        nd_comp_run(&p->comp, buf, n);
+        pcm = buf;
+    }
     if (!p->started) {
         size_t k = n < PREBUF - p->npre ? n : PREBUF - p->npre;
         memcpy(p->pre + p->npre, pcm, k * sizeof(*pcm));
@@ -217,6 +233,7 @@ static void say(const char *text)
     p.write_us = 0;
     p.peak = 0;
     p.write_err = 0;
+    nd_comp_init(&p.comp, ND_TTS_RATE, COMP_CEILING_DB);
     n = nd_tts_speak(&s_tts, text, play, &p);
     if (!p.started && p.npre)
         out(&p, p.pre, p.npre);             /* shorter than the prebuffer */
@@ -354,6 +371,9 @@ void app_main(void)
             int v = atoi(line + 5);
             esp_codec_dev_set_out_vol(s_spk, v < 0 ? 0 : v > 100 ? 100 : v);
             printf("EVT volume %d\n", v);
+        } else if (!strncmp(line, ":comp ", 6)) {
+            s_comp = atoi(line + 6) != 0;
+            printf("EVT comp %s\n", s_comp ? "on" : "off");
         } else if (!strncmp(line, ":tone", 5)) {
             tone(atoi(line + 5), 0);
         } else if (!strncmp(line, ":rawtone", 8)) {

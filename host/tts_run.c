@@ -1,16 +1,19 @@
 /* tts_run - Pico text to speech on the host, for rehearsal and timing.
  *
- *   tts_run lang_dir en "Flashing blue for five seconds." [out.wav]
+ *   tts_run lang_dir en "Flashing blue for five seconds." [out.wav] [--comp DB]
  *
  * Writes 16 kHz mono 16-bit WAV (default tts.wav) and prints how long
- * synthesis took against the length of the speech. Reads the text from stdin
- * when it is "-".
+ * synthesis took against the length of the speech, and its peak and RMS
+ * level. Reads the text from stdin when it is "-". --comp runs the output
+ * through nd_comp (as tts_demo does) with its ceiling at DB dBFS.
  */
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
+#include "nd_comp.h"
 #include "nd_tts.h"
 
 typedef struct {
@@ -60,6 +63,21 @@ static int write_wav(const char *path, const int16_t *pcm, size_t n)
     return fclose(f);
 }
 
+static void levels(const char *what, const int16_t *pcm, size_t n)
+{
+    double sum = 0;
+    int    peak = 0;
+    size_t i;
+    for (i = 0; i < n; i++) {
+        int a = abs(pcm[i]);
+        sum += (double)pcm[i] * pcm[i];
+        if (a > peak)
+            peak = a;
+    }
+    printf("%-8s peak %6.1f dBFS  rms %6.1f dBFS\n", what, 20 * log10((peak + 1) / 32768.0),
+           20 * log10(sqrt(sum / (n ? n : 1)) / 32768.0 + 1e-9));
+}
+
 static char *read_stdin(void)
 {
     size_t n = 0, cap = 4096;
@@ -81,7 +99,9 @@ int main(int argc, char **argv)
     buf             b = { 0 };
     void           *mem;
     char           *text;
-    const char     *out = argc > 4 ? argv[4] : "tts.wav";
+    const char     *out = argc > 4 && strncmp(argv[4], "--", 2) ? argv[4] : "tts.wav";
+    const char     *comp = NULL;
+    int             i;
     struct timespec t0, t1, t2;
     double          load_s, synth_s, speech_s;
     long            n;
@@ -91,6 +111,9 @@ int main(int argc, char **argv)
                         "  lang: en de fr es it (or en-US en-GB de-DE ...)\n", argv[0]);
         return 2;
     }
+    for (i = 4; i + 1 < argc; i++)
+        if (!strcmp(argv[i], "--comp"))
+            comp = argv[i + 1];
     text = strcmp(argv[3], "-") ? argv[3] : read_stdin();
     mem = malloc(ND_TTS_MEM_SIZE);
     if (!text || !mem)
@@ -115,6 +138,13 @@ int main(int argc, char **argv)
     speech_s = (double)b.n / ND_TTS_RATE;
     printf("voice %s  load %.3f s  speech %.2f s  synth %.3f s  (%.1fx real time)\n",
            t.lang, load_s, speech_s, synth_s, synth_s > 0 ? speech_s / synth_s : 0.0);
+    levels("pico", b.pcm, b.n);
+    if (comp) {
+        nd_comp c;
+        nd_comp_init(&c, ND_TTS_RATE, (float)atof(comp));
+        nd_comp_run(&c, b.pcm, b.n);
+        levels("comp", b.pcm, b.n);
+    }
     if (write_wav(out, b.pcm, b.n)) {
         fprintf(stderr, "tts: cannot write %s\n", out);
         return 1;
