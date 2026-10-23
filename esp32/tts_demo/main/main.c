@@ -110,6 +110,15 @@ static esp_codec_dev_handle_t speaker_init(void)
     const audio_codec_data_if_t *data_if = audio_codec_new_i2s_data(&i2s_cfg);
     const audio_codec_ctrl_if_t *ctrl_if = audio_codec_new_i2c_ctrl(&i2c_cfg);
     const audio_codec_gpio_if_t *gpio_if = audio_codec_new_gpio();
+    /* The codec keeps its registers across a reset of the P4, and
+     * esp_codec_dev sets 16-bit samples by ORing 0x0C into the serial port
+     * formats without clearing them first. After whistle_demo's microphone
+     * setup (32-bit, 0x10) that gave 0x1C, a word length the ES8311 does not
+     * have, and a silent DAC. Back to the power-on default first. */
+    for (int reg = 0x09; ctrl_if && reg <= 0x0A; reg++) {
+        int zero = 0;
+        ctrl_if->write_reg(ctrl_if, reg, 1, &zero, 1);
+    }
     es8311_codec_cfg_t es = {
         .ctrl_if = ctrl_if,
         .gpio_if = gpio_if,
@@ -282,16 +291,35 @@ static void console_init(void)
 #endif
 }
 
+/* Keep printable ASCII and well-formed UTF-8, drop everything else in
+ * place. Opening the serial port can glitch a junk byte onto the line. */
+static size_t clean_utf8(char *buf)
+{
+    unsigned char *in = (unsigned char *)buf, *out = in;
+    while (*in) {
+        int len = *in < 0x80 ? 1 : (*in & 0xE0) == 0xC0 ? 2 : (*in & 0xF0) == 0xE0 ? 3
+                : (*in & 0xF8) == 0xF0 ? 4 : 0;
+        int k;
+        for (k = 1; k < len; k++)
+            if ((in[k] & 0xC0) != 0x80)
+                break;
+        if (len == 0 || k < len || (len == 1 && *in < 0x20 && *in != '\t')) {
+            in++;
+            continue;
+        }
+        while (len--)
+            *out++ = *in++;
+    }
+    *out = 0;
+    return (size_t)(out - (unsigned char *)buf);
+}
+
 /* One line from the console, without its line ending. */
 static int read_line(char *buf, size_t size)
 {
-    size_t n;
     if (!fgets(buf, (int)size, stdin))
         return -1;
-    n = strlen(buf);
-    while (n && (buf[n - 1] == '\n' || buf[n - 1] == '\r'))
-        buf[--n] = 0;
-    return (int)n;
+    return (int)clean_utf8(buf);     /* also drops the CR and LF */
 }
 
 void app_main(void)
